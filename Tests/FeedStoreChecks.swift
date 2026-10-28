@@ -4,6 +4,7 @@ import Foundation
 // No credentials or network are used; responses can finish out of order.
 @MainActor final class FakeFeedSource: FeedPageReading {
     var feedIdentity = "fixture:1"
+    var siteRetryAvailableAt: Date?
     struct Request { let filter: FeedFilter; let cursor: String?; let creatorID: Int?; let collectionID: Int?; let includeTags: Bool; let followed: Bool; let allAccessibleLevels: Bool; var searchID: String? = nil }
     var requests: [Request] = []
     var fetch: (Request) async throws -> MediaPage = { _ in .init(items: [], metadata: .init(nextCursor: nil)) }
@@ -36,6 +37,35 @@ import Foundation
             .init(items: id.map { [.init(id: $0, url: "https://example.com/fixture/\($0)", width: nil, height: nil, type: video ? "video" : "image", username: "fixture", browsingLevel: 1, thumbnail: nil)] } ?? [], metadata: .init(nextCursor: cursor))
         }
         var fixtureNow = Date(timeIntervalSince1970: 1_800_000_000)
+        do {
+            let observed = TagObservationStore(), source = FakeFeedSource()
+            let collected = FeedStore(observations: observed)
+            let valid = (1...3).map { id in
+                MediaItem(id: id, url: "https://fixture.invalid/observed/\(id)", width: 1, height: 1,
+                          type: "image", username: "fixture", browsingLevel: 1, thumbnail: nil,
+                          tags: [.init(id: 300, name: "sample")])
+            }
+            let invalid = MediaItem(id: 4, url: "", width: 1, height: 1, type: "image", username: "fixture",
+                                    browsingLevel: 1, thumbnail: nil, tags: [.init(id: 301, name: "invalid")])
+            source.fetch = { _ in .init(items: valid + [invalid], metadata: .init(nextCursor: nil)) }
+            _ = await collected.activate(session: source, filter: .init(kind: .all), source: .discovery,
+                                         blockedTags: ["blocked"], deduplicateMediaAssets: true)
+            let policy = TagAvailabilityPolicy(blockedTags: ["blocked"], deduplicateMediaAssets: true)
+            check(observed.estimate(tagID: 300, scope: source.tagEvidenceIdentity, policy: policy)?.countLowerBound == 3,
+                  "Normal FeedStore pages contribute visible tag samples through the shared integration")
+            check(observed.estimate(tagID: 301, scope: source.tagEvidenceIdentity, policy: policy) == nil,
+                  "Rows rejected by the actual accumulator cannot become tag evidence")
+            check(source.requests.count == 1, "Collecting evidence adds zero per-tag network reads")
+            let limited = FeedStore(now: { fixtureNow })
+            source.siteRetryAvailableAt = fixtureNow.addingTimeInterval(900)
+            source.fetch = { _ in throw ClientError.http(429) }
+            _ = await limited.activate(session: source, filter: .init(kind: .video), source: .discovery)
+            check(limited.retryAvailableAt == source.siteRetryAvailableAt,
+                  "Feed retries honor the shared server cooldown instead of a short local retry interval")
+            let calls = source.requests.count
+            _ = await limited.next(session: source)
+            check(source.requests.count == calls, "Repeated explicit continuation cannot bypass the shared deadline")
+        }
         let site = FakeFeedSource(), store = FeedStore(now: { fixtureNow })
         site.fetch = { _ in page(3) }
         let initial = await store.activate(session: site, filter: FeedFilter(kind: .image), source: .discovery)

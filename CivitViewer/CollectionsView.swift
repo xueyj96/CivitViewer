@@ -206,7 +206,7 @@ private struct CollectionWorksView: View {
     let collection: SavedCollection
     @EnvironmentObject private var session: SiteSession
     @ObservedObject private var blocklist = TagBlocklist.shared
-    @StateObject private var feed = FeedStore(diagnostics: .shared, authorBlocks: .shared)
+    @StateObject private var feed = FeedStore(diagnostics: .shared, observations: .shared, authorBlocks: .shared)
     @State private var kind: MediaKind = .all
     @State private var onlyPG = false
     @State private var durationRange: VideoDurationRange?

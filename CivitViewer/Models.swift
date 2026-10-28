@@ -254,6 +254,7 @@ enum ClientError: LocalizedError {
         switch self {
         case .signedOut: "请先登录 Civitai，再刷新账号状态。"
         case .loadingSite: "请先完成或关闭登录窗口。"
+        case .http(429): "站点请求过于频繁（429），已进入冷却，请稍后重试。"
         case .http(let status): "站点返回 HTTP \(status)，请稍后重试。"
         case .invalidResponse: "站点返回的数据格式暂不支持。"
         case .missingCreator: "暂时无法确认这位作者的账号。"

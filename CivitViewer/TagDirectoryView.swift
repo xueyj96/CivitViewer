@@ -7,10 +7,9 @@ struct TagDirectoryView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var blocklist = TagBlocklist.shared
     @ObservedObject private var authorBlocks = AuthorBlocklist.shared
-    @ObservedObject private var availability = TagMediaAvailability.shared
-    @AppStorage("tagDirectory.showCatalog56") private var showSparse = false
+    @ObservedObject private var observations = TagObservationStore.shared
+    @AppStorage("tagDirectory.showCatalog57") private var showSparse = false
     @AppStorage("deduplicateMedia") private var deduplicateMedia = true
-    @State private var checkingAvailability = false
     @State private var mode: TagDirectoryMode
     @State private var query: String
     @State private var selectionError: String?
@@ -28,28 +27,29 @@ struct TagDirectoryView: View {
         .init(blockedTags: blocklist.names, blockedAuthorIDs: authorBlocks.blockedIDs,
               blockedAuthorHandles: authorBlocks.blockedHandles, deduplicateMediaAssets: deduplicateMedia)
     }
-    private struct AvailabilityKey: Hashable { let identity: String; let ids: [Int]; let policy: TagAvailabilityPolicy }
-    private var availabilityKey: AvailabilityKey {
-        .init(identity: session.feedIdentity, ids: store.key == key ? store.tags.map(\.id) : [], policy: visibilityPolicy)
-    }
+    private var evidenceScope: String { session.tagEvidenceIdentity }
     private var displayedTags: [SearchTag] {
-        store.tags.filter { tag in showSparse || selected.contains(where: { $0.id == tag.id }) || availability.isRecommended(tagID: tag.id, identity: session.feedIdentity, policy: visibilityPolicy) }
+        let candidates = store.tags.filter { tag in
+            showSparse || selected.contains(where: { $0.id == tag.id }) || estimate(tag)?.isRecommended == true
+        }
+        let positions = Dictionary(store.tags.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: min)
+        return candidates.sorted { left, right in
+            let l = estimate(left), r = estimate(right)
+            let lActive = l?.emptyUntil == nil ? (l?.countLowerBound ?? 0) : -1
+            let rActive = r?.emptyUntil == nil ? (r?.countLowerBound ?? 0) : -1
+            if lActive != rActive { return lActive > rActive }
+            return (positions[left.id] ?? 0) < (positions[right.id] ?? 0)
+        }
     }
-    private var checkedTagCount: Int {
-        store.tags.filter { availability.result(tagID: $0.id, identity: session.feedIdentity, policy: visibilityPolicy) != nil }.count
+    private var sampledTagCount: Int { store.tags.filter { estimate($0) != nil }.count }
+    private func estimate(_ tag: SearchTag) -> TagObservationEstimate? {
+        observations.estimate(tagID: tag.id, scope: evidenceScope, policy: visibilityPolicy)
     }
     private func status(_ tag: SearchTag) -> String {
-        guard let result = availability.result(tagID: tag.id, identity: session.feedIdentity, policy: visibilityPolicy) else { return "待核对作品" }
-        switch result.state {
-        case .enough: return "至少 \(result.countLowerBound) 条可展示作品"
-        case .sparse: return "当前可展示 \(result.countLowerBound) 条"
-        case .unknown:
-            if let http = result.httpStatus { return "核对失败 · HTTP \(http)" }
-            if result.reason == .pageLimit { return "尚未查完" }
-            if result.reason == .searchEmpty { return "搜索未取得可展示作品" }
-            if result.reason == .metadataMissing || result.reason == .invalidMedia { return "作品资料待核实" }
-            return "暂未核实作品"
-        }
+        guard let sample = estimate(tag) else { return "暂无浏览样本" }
+        if sample.emptyUntil != nil { return "近期搜索未显示作品" }
+        guard sample.countLowerBound > 0 else { return "浏览样本已过期" }
+        return "近 30 天见过 ≥\(sample.countLowerBound) 条"
     }
     var body: some View {
         NavigationStack {
@@ -94,7 +94,7 @@ struct TagDirectoryView: View {
                         Text("标签范围").font(.caption).foregroundStyle(.secondary)
                         Spacer()
                         Picker("标签范围", selection: $showSparse) {
-                            Text("有作品").tag(false)
+                            Text("近期活跃").tag(false)
                             Text("全部目录").tag(true)
                         }.pickerStyle(.segmented).frame(maxWidth: 260)
                             .accessibilityIdentifier("tag-directory.sparse-toggle")
@@ -135,10 +135,8 @@ struct TagDirectoryView: View {
                         }
                         if store.loading {
                             HStack(spacing: 10) { ProgressView(); Text(store.tags.isEmpty ? "正在查找标签…" : "正在补充更多标签…").font(.caption).foregroundStyle(.secondary) }
-                        } else if checkingAvailability && !showSparse {
-                            HStack(spacing: 8) { ProgressView(); Text("正在核对可展示作品…").font(.caption).foregroundStyle(.secondary) }
                         } else if displayedTags.isEmpty && !store.tags.isEmpty {
-                            Text("这批候选尚无已确认足量的可展示作品。可继续核对，或切换“全部目录”查看状态。").font(.caption).foregroundStyle(.secondary)
+                            Text("当前候选还没有足量浏览样本。正常浏览会自动积累；也可切换“全部目录”查看其他标签。").font(.caption).foregroundStyle(.secondary)
                         } else if store.tags.isEmpty && store.reachedEnd {
                             Text("没有找到匹配标签，可尝试其他名称或首字母。").foregroundStyle(.secondary)
                         } else if store.tags.isEmpty && store.error == nil && store.onlineError == nil {
@@ -160,14 +158,9 @@ struct TagDirectoryView: View {
                         if !store.loading && !store.reachedEnd { Button("继续加载标签") { perform { await store.next(source: session) } }.buttonStyle(AppActionButtonStyle()) }
                     } else if valid { ProgressView("正在查找标签…") }
                     else { Text(MediaSearchText.validationMessage).font(.caption).foregroundStyle(.secondary) }
-                        Text("当前显示 \(store.key == key ? displayedTags.count : 0) 个 · 已核对 \(checkedTagCount) 个").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                        if store.key == key, !store.tags.isEmpty {
-                            Button("核对更多候选的作品量") {
-                                perform { await verifyCurrentCandidates() }
-                            }.font(.caption).buttonStyle(AppActionButtonStyle()).disabled(checkingAvailability)
-                        }
+                        Text("当前显示 \(store.key == key ? displayedTags.count : 0) 个 · 有样本 \(sampledTagCount) 个").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                         DisclosureGroup("目录范围", isExpanded: $showDirectoryScope) {
-                            Text("“有作品”只展示已核对且至少有 3 条可展示作品的候选，采用当前账号内容范围、全部媒体、全部时间及本机屏蔽和去重规则。已选标签保留并标注状态。完整标签库保留在“全部目录”；未核对、失败或尚未查完均不算零作品。联合搜索还须同时满足标题、作者和全部标签。每批核对有限候选，不代表全站总量。")
+                            Text("“近期活跃”优先显示近 30 天在正常浏览中见过至少 3 条不同作品的标签，数量是样本下界，不是全站总量；估计不额外请求作品。未见过不代表零作品，完整词表保留在“全部目录”。同条件单标签搜索确认没有可展示作品后暂时隐藏，新样本可恢复。已选标签保留。联合搜索仍须同时满足全部条件。")
                                 .font(.caption).foregroundStyle(.secondary).padding(.top, 6)
                         }.font(.caption).foregroundStyle(.secondary)
                     }.padding(16)
@@ -181,34 +174,19 @@ struct TagDirectoryView: View {
                     guard valid else { store.cancel(); return }
                     await store.reload(key: key, source: session)
                 }
-                .task(id: availabilityKey) {
-                    guard store.key == key, valid else { return }
-                    await verifyCurrentCandidates()
-                }
+                .task(id: evidenceScope) { await observations.activate(scope: evidenceScope) }
                 .refreshable { if valid { await store.reload(key: key, source: session, forceRemote: true) } }
                 .onChange(of: key) { _, _ in actionTask?.cancel(); actionTask = nil }
                 .onDisappear { actionTask?.cancel(); actionTask = nil; store.cancel() }
                 #if DEBUG && targetEnvironment(simulator)
                 .overlay(alignment: .topLeading) {
                     if ProcessInfo.processInfo.arguments.contains("--qa-tag-availability55") {
-                        let zero = availability.result(tagID: 42_002, identity: session.feedIdentity, policy: visibilityPolicy)
-                        let value = "identity=\(session.feedIdentity);showSparse=\(showSparse);selected=\(selected.map(\.id));loaded=\(store.tags.count);visible=\(displayedTags.count);checked=\(availability.checkedCount(identity: session.feedIdentity));zero=\(String(describing: zero?.state));revision=\(availability.revision)"
+                        let value = "showSparse=\(showSparse);selected=\(selected.map(\.id));loaded=\(store.tags.count);visible=\(displayedTags.count);sampled=\(sampledTagCount);probeReads=\(session.tagCandidateReads);revision=\(observations.revision)"
                         Text(value).font(.system(size: 1)).frame(width: 1, height: 1).opacity(0.01).allowsHitTesting(false)
                             .accessibilityIdentifier("qa.tag-availability55").accessibilityValue(value)
                     }
                 }
                 #endif
-        }
-    }
-    private func verifyCurrentCandidates() async {
-        let captured = availabilityKey
-        checkingAvailability = true
-        defer { if captured == availabilityKey { checkingAvailability = false } }
-        // Complete two bounded batches for the current candidate window. No
-        // scan of the full on-disk vocabulary is triggered by opening a sheet.
-        for _ in 0..<2 {
-            guard !Task.isCancelled, captured == availabilityKey else { return }
-            await availability.verify(tags: store.tags, source: session, policy: captured.policy)
         }
     }
     private func toggle(_ tag: SearchTag) {

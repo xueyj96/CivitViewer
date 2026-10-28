@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import CryptoKit
 
 enum TagMediaAvailabilityState: Equatable { case enough, sparse, unknown }
 
@@ -194,4 +195,343 @@ struct TagMediaAvailabilityResult: Equatable {
             blockedTags: policy.blockedTags.count, blockedAuthors: policy.blockedAuthorIDs.count)
         diagnostics?.note(area: .search, code: .tagProbe, httpStatus: value.httpStatus, tagSearch: context)
     }
+}
+
+struct TagObservationEstimate: Equatable {
+    let countLowerBound: Int
+    let lastSeen: Date?
+    let emptyUntil: Date?
+    var isRecommended: Bool { countLowerBound >= 3 && emptyUntil == nil }
+}
+
+/// Local bounded evidence gathered only from items already admitted to a visible feed.
+/// This is a lower bound over recent examples, never a total-count estimate.
+@MainActor final class TagObservationStore: ObservableObject {
+    static let shared: TagObservationStore = {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        return TagObservationStore(rootURL: base.appendingPathComponent("CivitTagLibrary/Observed", isDirectory: true))
+    }()
+
+    @Published private(set) var revision = 0
+
+    private struct Witness: Codable, Equatable {
+        let key: String
+        let seenAt: Date
+    }
+    private struct TagRecord: Codable {
+        var witnesses: [Witness]
+        var emptyUntil: Date?
+        var touchedAt: Date
+    }
+    private struct DiskTag: Codable {
+        let tagID: Int
+        let record: TagRecord
+    }
+    private struct DiskContext: Codable {
+        let hash: String
+        let touchedAt: Date
+        let tags: [DiskTag]
+    }
+    private struct DiskFile: Codable {
+        let version: Int
+        var contexts: [DiskContext]
+    }
+    private struct Key: Hashable { let context: String; let tagID: Int }
+    private enum LoadedFile { case missing, data(Data), invalid }
+
+    private let rootURL: URL?
+    private let now: () -> Date
+    private let maxWitnesses = 8
+    private let maxTagsPerContext = 5_000
+    private let maxContexts = 4
+    private let fileName = "observations-v1.json"
+    private var records: [Key: TagRecord] = [:]
+    private var contextTouches: [String: Date] = [:]
+    private var loadTask: Task<LoadedFile, Never>?
+    private var loaded = false
+    private var persistenceWritable = true
+    private var debounceTask: Task<Void, Never>?
+    private var pendingWrite: (id: UUID, task: Task<(Int, Bool), Never>)?
+    private var persistedRevision = 0
+
+    init(rootURL: URL? = nil, now: @escaping () -> Date = Date.init) {
+        self.rootURL = rootURL
+        self.now = now
+        self.loaded = rootURL == nil
+    }
+
+    func activate(scope: String) async {
+        guard let rootURL, !loaded else { return }
+        if loadTask == nil {
+            let fileURL = rootURL.appendingPathComponent(fileName)
+            loadTask = Task.detached(priority: .utility) {
+                do {
+                    let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+                    guard let size = attributes[.size] as? NSNumber, size.uint64Value <= 8 * 1024 * 1024 else { return .invalid }
+                    return .data(try Data(contentsOf: fileURL))
+                } catch let error as CocoaError where error.code == .fileReadNoSuchFile { return .missing }
+                catch { return .invalid }
+            }
+        }
+        guard let task = loadTask else { return }
+        let loadedFile = await task.value
+        guard !loaded else { loadTask = nil; return }
+        loadTask = nil
+        switch loadedFile {
+        case .invalid:
+            persistenceWritable = false
+        case .missing:
+            break
+        case .data(let data):
+            do {
+                let file = try JSONDecoder().decode(DiskFile.self, from: data)
+                guard file.version == 1,
+                      isValid(file) else {
+                    persistenceWritable = false
+                    loaded = true
+                    return
+                }
+                merge(file)
+            } catch {
+                // Preserve a corrupt or incompatible file; it is not evidence of zero.
+                persistenceWritable = false
+            }
+        }
+        loaded = true
+        trim()
+        revision &+= 1
+        scheduleWriteIfNeeded()
+    }
+
+    func observe(items: [MediaItem], scope: String, policy: TagAvailabilityPolicy) {
+        let context = contextHash(scope: scope, policy: policy)
+        let stamp = now()
+        contextTouches[context] = stamp
+        for item in items where item.id > 0 {
+            let witness = witnessKey(item: item, deduplicate: policy.deduplicateMediaAssets)
+            guard !witness.isEmpty else { continue }
+            for tag in item.tags ?? [] {
+                guard let tagID = tag.id, tagID > 0 else { continue }
+                let key = Key(context: context, tagID: tagID)
+                var record = records[key] ?? TagRecord(witnesses: [], emptyUntil: nil, touchedAt: stamp)
+                record.witnesses.removeAll { $0.key == witness }
+                record.witnesses.append(Witness(key: witness, seenAt: stamp))
+                record.witnesses.sort { $0.seenAt > $1.seenAt }
+                record.witnesses = Array(record.witnesses.prefix(maxWitnesses))
+                record.emptyUntil = nil
+                record.touchedAt = stamp
+                records[key] = record
+            }
+        }
+        trim()
+        revision &+= 1
+        scheduleWriteIfNeeded()
+    }
+
+    func recordEmpty(tagID: Int, scope: String, policy: TagAvailabilityPolicy) {
+        guard tagID > 0 else { return }
+        let context = contextHash(scope: scope, policy: policy)
+        let stamp = now()
+        contextTouches[context] = stamp
+        let key = Key(context: context, tagID: tagID)
+        var record = records[key] ?? TagRecord(witnesses: [], emptyUntil: nil, touchedAt: stamp)
+        record.emptyUntil = stamp.addingTimeInterval(24 * 60 * 60)
+        record.touchedAt = stamp
+        records[key] = record
+        trim()
+        revision &+= 1
+        scheduleWriteIfNeeded()
+    }
+
+    func estimate(tagID: Int, scope: String, policy: TagAvailabilityPolicy) -> TagObservationEstimate? {
+        guard tagID > 0 else { return nil }
+        let context = contextHash(scope: scope, policy: policy)
+        guard let record = records[Key(context: context, tagID: tagID)] else { return nil }
+        let instant = now()
+        let cutoff = instant.addingTimeInterval(-30 * 24 * 60 * 60)
+        let recent = record.witnesses.filter { $0.seenAt >= cutoff && $0.seenAt <= instant }
+        let last = record.witnesses.map(\.seenAt).max()
+        let activeEmpty = record.emptyUntil.flatMap { $0 > instant ? $0 : nil }
+        return .init(countLowerBound: recent.count, lastSeen: last, emptyUntil: activeEmpty)
+    }
+
+    func flush() async {
+        guard rootURL != nil else { return }
+        if !loaded {
+            await activate(scope: "")
+            guard loaded else { return }
+        }
+        debounceTask?.cancel()
+        debounceTask = nil
+        let targetRevision = revision
+        while persistenceWritable && persistedRevision < targetRevision {
+            if let writer = pendingWrite {
+                let (writtenRevision, success) = await writer.task.value
+                if pendingWrite?.id == writer.id { pendingWrite = nil }
+                if success { persistedRevision = max(persistedRevision, writtenRevision) }
+                else { persistenceWritable = false; return }
+            } else {
+                startWriter()
+            }
+        }
+    }
+
+    private func scheduleWriteIfNeeded() {
+        guard rootURL != nil, persistenceWritable else { return }
+        debounceTask?.cancel()
+        debounceTask = Task { @MainActor in
+            do { try await Task.sleep(for: .seconds(1)) } catch { return }
+            await self.debounceElapsed()
+        }
+    }
+
+    private func debounceElapsed() async {
+        debounceTask = nil
+        guard persistenceWritable else { return }
+        if !loaded { await activate(scope: "") }
+        guard loaded, persistenceWritable else { return }
+        while let writer = pendingWrite {
+            let (writtenRevision, success) = await writer.task.value
+            if pendingWrite?.id == writer.id { pendingWrite = nil }
+            if success { persistedRevision = max(persistedRevision, writtenRevision) }
+            else { persistenceWritable = false; return }
+        }
+        if persistedRevision < revision { startWriter() }
+    }
+
+    private func startWriter() {
+        guard let rootURL, persistenceWritable, loaded, pendingWrite == nil else { return }
+        let snapshot = makeDiskFile()
+        let snapshotRevision = revision
+        let fileURL = rootURL.appendingPathComponent(fileName)
+        let writerID = UUID()
+        let writer = Task.detached(priority: .utility) {
+            do {
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.sortedKeys]
+                var diskSnapshot = snapshot
+                var data = try encoder.encode(diskSnapshot)
+                // Keep the full in-memory LRU state; only the persisted snapshot sheds
+                // oldest whole contexts until it fits the bounded file budget.
+                while data.count > 8 * 1024 * 1024, !diskSnapshot.contexts.isEmpty {
+                    diskSnapshot.contexts.removeLast()
+                    data = try encoder.encode(diskSnapshot)
+                }
+                guard data.count <= 8 * 1024 * 1024 else { return (snapshotRevision, false) }
+                try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
+                try Self.applyProtection(to: rootURL)
+                try data.write(to: fileURL, options: .atomic)
+                try Self.applyProtection(to: fileURL)
+                return (snapshotRevision, true)
+            } catch { return (snapshotRevision, false) }
+        }
+        pendingWrite = (writerID, writer)
+    }
+
+    nonisolated private static func applyProtection(to url: URL) throws {
+        try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: url.path)
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        var mutableURL = url
+        try mutableURL.setResourceValues(values)
+    }
+
+    private func isValid(_ file: DiskFile) -> Bool {
+        guard file.contexts.count <= maxContexts else { return false }
+        var contextHashes = Set<String>()
+        for context in file.contexts {
+            guard context.hash.count == 64,
+                  context.hash.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }),
+                  contextHashes.insert(context.hash).inserted,
+                  context.tags.count <= maxTagsPerContext,
+                  context.touchedAt.timeIntervalSince1970.isFinite else { return false }
+            var tagIDs = Set<Int>()
+            for tag in context.tags {
+                guard tag.tagID > 0, tagIDs.insert(tag.tagID).inserted,
+                      tag.record.witnesses.count <= maxWitnesses,
+                      tag.record.touchedAt.timeIntervalSince1970.isFinite,
+                      tag.record.emptyUntil.map({ $0.timeIntervalSince1970.isFinite }) ?? true else { return false }
+                var witnessKeys = Set<String>()
+                for witness in tag.record.witnesses {
+                    guard witness.seenAt.timeIntervalSince1970.isFinite, isValidWitnessKey(witness.key),
+                          witnessKeys.insert(witness.key).inserted else { return false }
+                }
+            }
+        }
+        return true
+    }
+
+    private func isValidWitnessKey(_ key: String) -> Bool {
+        if key.hasPrefix("id:") {
+            let digits = key.dropFirst(3)
+            return !digits.isEmpty && digits.utf8.allSatisfy { (48...57).contains($0) } && (Int(digits) ?? 0) > 0
+        }
+        let parts = key.split(separator: ":", omittingEmptySubsequences: false)
+        return parts.count == 3 && parts[0] == "civitai" && ["image", "video"].contains(String(parts[1])) &&
+            UUID(uuidString: String(parts[2])) != nil
+    }
+
+    private func witnessKey(item: MediaItem, deduplicate: Bool) -> String {
+        guard deduplicate, let asset = item.mediaAssetKey else { return "id:\(item.id)" }
+        let parts = asset.split(separator: ":", omittingEmptySubsequences: false)
+        guard parts.count == 3, parts[0] == "civitai", ["image", "video"].contains(String(parts[1])),
+              UUID(uuidString: String(parts[2])) != nil else { return "id:\(item.id)" }
+        return asset
+    }
+
+    private func contextHash(scope: String, policy: TagAvailabilityPolicy) -> String {
+        let tags = policy.blockedTags.map(TagPolicy.normalize).sorted().joined(separator: "\u{1f}")
+        let authorIDs = policy.blockedAuthorIDs.sorted().map(String.init).joined(separator: ",")
+        let handles = policy.blockedAuthorHandles.map(AuthorHandlePolicy.normalize).sorted().joined(separator: "\u{1f}")
+        let canonical = [scope, tags, authorIDs, handles, policy.deduplicateMediaAssets ? "1" : "0"].joined(separator: "\u{1e}")
+        return SHA256.hash(data: Data(canonical.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func trim() {
+        var contexts = Set(records.keys.map(\.context))
+        while contexts.count > maxContexts {
+            guard let oldest = contexts.min(by: { (contextTouches[$0] ?? .distantPast) < (contextTouches[$1] ?? .distantPast) }) else { break }
+            records = records.filter { $0.key.context != oldest }
+            contextTouches.removeValue(forKey: oldest)
+            contexts.remove(oldest)
+        }
+        for context in contexts {
+            let keys = records.keys.filter { $0.context == context }
+            if keys.count > maxTagsPerContext {
+                let remove = keys.sorted { (records[$0]?.touchedAt ?? .distantPast) < (records[$1]?.touchedAt ?? .distantPast) }
+                    .prefix(keys.count - maxTagsPerContext)
+                for key in remove { records.removeValue(forKey: key) }
+            }
+        }
+    }
+
+    private func makeDiskFile() -> DiskFile {
+        let contexts = Dictionary(grouping: records, by: { $0.key.context }).map { hash, values in
+            DiskContext(hash: hash, touchedAt: contextTouches[hash] ?? .distantPast,
+                        tags: values.map { DiskTag(tagID: $0.key.tagID, record: $0.value) }.sorted { $0.tagID < $1.tagID })
+        }.sorted { $0.touchedAt > $1.touchedAt }
+        return DiskFile(version: 1, contexts: contexts)
+    }
+
+    private func merge(_ file: DiskFile) {
+        for context in file.contexts {
+            contextTouches[context.hash] = max(contextTouches[context.hash] ?? .distantPast, context.touchedAt)
+            for diskTag in context.tags where diskTag.tagID > 0 {
+                let key = Key(context: context.hash, tagID: diskTag.tagID)
+                guard let current = records[key] else { records[key] = diskTag.record; continue }
+                let merged = Dictionary((current.witnesses + diskTag.record.witnesses).map { ($0.key, $0) }, uniquingKeysWith: { a, b in a.seenAt >= b.seenAt ? a : b })
+                var record = current
+                record.witnesses = merged.values.sorted { $0.seenAt > $1.seenAt }.prefix(maxWitnesses).map { $0 }
+                if diskTag.record.touchedAt > current.touchedAt {
+                    record.emptyUntil = diskTag.record.emptyUntil
+                } else {
+                    record.emptyUntil = current.emptyUntil
+                }
+                record.touchedAt = max(current.touchedAt, diskTag.record.touchedAt)
+                records[key] = record
+            }
+        }
+    }
+
 }

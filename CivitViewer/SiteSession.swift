@@ -32,8 +32,16 @@ final class SiteSession: NSObject, ObservableObject, WKNavigationDelegate, WKUID
     private var authGeneration = 0
     #if DEBUG
     private(set) var tagRPCReads = 0
+    private(set) var tagCandidateReads = 0
     #endif
     var feedIdentity: String { "\(authGeneration):\(account?.id ?? -1):\(account?.browsingLevel ?? -1)" }
+    var tagEvidenceIdentity: String {
+        #if DEBUG && targetEnvironment(simulator)
+        if CollectionPagingQA.enabled { return "local-fixture|\(ProcessInfo.processInfo.processIdentifier)" }
+        #endif
+        return "\(Self.origin)|\(account?.id ?? -1)|\(account?.browsingLevel ?? -1)"
+    }
+    var siteRetryAvailableAt: Date? { SiteRequestCooldown.shared.retryAvailableAt }
     var followingIdentity: String { "\(authGeneration):\(account?.id ?? -1):\(account?.username ?? "")" }
     var followingActorID: Int? { account?.id }
     var followingMemberIDs: Set<Int> { following }
@@ -71,10 +79,23 @@ final class SiteSession: NSObject, ObservableObject, WKNavigationDelegate, WKUID
     func configureForCollectionPagingQA() {
         guard CollectionPagingQA.enabled else { return }
         if ProcessInfo.processInfo.arguments.contains("--qa-tag-availability55") {
-            UserDefaults.standard.set(false, forKey: "tagDirectory.showCatalog56")
+            UserDefaults.standard.set(false, forKey: "tagDirectory.showCatalog57")
         }
         account = Account(id: CollectionPagingQA.ownerID, username: "PagingFixture", browsingLevel: 1,
                           blurNsfw: ProcessInfo.processInfo.arguments.contains("--qa-image-failure55"))
+        if ProcessInfo.processInfo.arguments.contains("--qa-tag-availability55") || ProcessInfo.processInfo.arguments.contains("--qa-style48") {
+            let special = ProcessInfo.processInfo.arguments.contains("--qa-tag-availability55")
+            let policy = TagAvailabilityPolicy(blockedTags: TagBlocklist.shared.names, blockedAuthorIDs: AuthorBlocklist.shared.blockedIDs,
+                blockedAuthorHandles: AuthorBlocklist.shared.blockedHandles, deduplicateMediaAssets: UserDefaults.standard.object(forKey: "deduplicateMedia") as? Bool ?? true)
+            for tag in 42_001...42_018 where !special || ![42_002,42_003].contains(tag) {
+                let items = (0..<3).map { offset in
+                    MediaItem(id: tag * 10 + offset, url: "https://example.invalid/local-fixture/\(tag)/\(offset)", width: 1, height: 1,
+                              type: "image", username: "LocalFixture", browsingLevel: 1, thumbnail: nil, tags: [.init(id: tag, name: "fixture")])
+                }
+                TagObservationStore.shared.observe(items: items, scope: tagEvidenceIdentity, policy: policy)
+            }
+            if special { TagObservationStore.shared.recordEmpty(tagID: 42_002, scope: tagEvidenceIdentity, policy: policy) }
+        }
         collections = [CollectionPagingQA.collection]; collectionsKnown = true
         if VisualControlsQA.enabled {
             following = []; followsKnown = true; savedMemberships = [:]
@@ -245,14 +266,16 @@ final class SiteSession: NSObject, ObservableObject, WKNavigationDelegate, WKUID
         if oauth.hasCredentials {
             return try await request(path: components.url!.path + "?" + (components.percentEncodedQuery ?? ""))
         }
-        let (data, response) = try await URLSession.shared.data(from: components.url!)
+        let (data, response) = try await SiteRequestCooldown.shared.performRead {
+            try await URLSession.shared.data(from: components.url!)
+        }
         guard let response = response as? HTTPURLResponse else { throw ClientError.invalidResponse }
         if response.statusCode == 403 {
             // Some site edges reject non-browser clients. Use the real embedded
             // website session; do not spoof browser headers or bypass challenges.
             return try await request(path: components.url!.path + "?" + (components.percentEncodedQuery ?? ""))
         }
-        guard response.statusCode == 200 else { throw ClientError.http(response.statusCode) }
+        try SiteRequestCooldown.shared.validateResponse(status: response.statusCode, retryAfter: response.value(forHTTPHeaderField: "Retry-After"))
         return try JSONDecoder().decode(MediaPage.self, from: data)
     }
 
@@ -533,6 +556,9 @@ final class SiteSession: NSObject, ObservableObject, WKNavigationDelegate, WKUID
 
     func tagCandidates(tagID: Int, author: Creator?, filter: FeedFilter, cursor: String?, limit: Int) async throws -> MediaPage {
         guard tagID > 0, (1...100).contains(limit) else { throw ClientError.invalidResponse }
+        #if DEBUG
+        tagCandidateReads += 1
+        #endif
         #if DEBUG && targetEnvironment(simulator)
         if CollectionPagingQA.enabled && (ProcessInfo.processInfo.arguments.contains("--qa-tag-availability55") || ProcessInfo.processInfo.arguments.contains("--qa-style48")) {
             if ProcessInfo.processInfo.arguments.contains("--qa-tag-availability55"), tagID == 42_002 { return .init(items: [], metadata: .init(nextCursor: nil)) }
@@ -809,6 +835,8 @@ final class SiteSession: NSObject, ObservableObject, WKNavigationDelegate, WKUID
         }
         try checkCurrentSession()
         guard path.hasPrefix("/api/"), !path.hasPrefix("//") else { throw ClientError.invalidResponse }
+        let limitedRead = method == "GET" && !sessionIdentityOnly && !path.hasPrefix("/api/auth/")
+        if limitedRead { try SiteRequestCooldown.shared.check() }
         if oauth.hasCredentials {
             var request = URLRequest(url: URL(string: Self.origin + path)!)
             request.httpMethod = method; request.cachePolicy = .reloadIgnoringLocalCacheData
@@ -820,15 +848,18 @@ final class SiteSession: NSObject, ObservableObject, WKNavigationDelegate, WKUID
             do { (data, response) = try await oauth.authorizedData(for: request) }
             catch { try checkCurrentSession(); throw error }
             try checkCurrentSession()
-            guard response.statusCode != 401 else { throw ClientError.signedOut }
-            guard response.statusCode == 200 else { throw ClientError.http(response.statusCode) }
+            try SiteRequestCooldown.shared.validateResponse(status: response.statusCode,
+                retryAfter: response.value(forHTTPHeaderField: "Retry-After"), markSuccess: false)
             let value = try JSONSerialization.jsonObject(with: data)
             var payload: Any = value
             if rpc {
-                guard let root = value as? [String: Any], root["error"] == nil,
-                      let result = root["result"] as? [String: Any], let data = result["data"] else { throw ClientError.invalidResponse }
+                guard let root = value as? [String: Any] else { throw ClientError.invalidResponse }
+                try SiteRequestCooldown.shared.validateResponse(status: 200,
+                    retryAfter: response.value(forHTTPHeaderField: "Retry-After"), rpcError: root["error"], markSuccess: false)
+                guard let result = root["result"] as? [String: Any], let data = result["data"] else { throw ClientError.invalidResponse }
                 payload = (data as? [String: Any])?["json"] ?? data
             }
+            if limitedRead { SiteRequestCooldown.shared.recordSuccess() }
             if sessionIdentityOnly {
                 let user = (value as? [String: Any])?["user"] as? [String: Any]
                 payload = user.map { ["id": $0["id"] ?? NSNull(), "username": $0["username"] ?? NSNull(),
@@ -846,9 +877,9 @@ final class SiteSession: NSObject, ObservableObject, WKNavigationDelegate, WKUID
           const options = {method, credentials:'include', cache:'no-store', signal:abort.signal};
           if (method === 'POST') { options.headers={'Content-Type':'application/json'}; options.body=body; }
           const r = await fetch(path, options);
-          if (!r.ok) return JSON.stringify({ok:false,status:r.status});
+          if (!r.ok) return JSON.stringify({ok:false,status:r.status,retryAfter:r.status===429?r.headers.get('Retry-After'):null});
           const value = await r.json();
-          if (rpc && value.error) return JSON.stringify({ok:false,status:value.error.json?.data?.httpStatus || 400});
+          if (rpc && value.error) return JSON.stringify({ok:false,status:value.error.json?.data?.httpStatus || 400,retryAfter:r.headers.get('Retry-After')});
           let payload = rpc ? value.result?.data : value;
           if (rpc && payload && Object.prototype.hasOwnProperty.call(payload,'json')) payload = payload.json;
           if (identity) payload = payload?.user ? {id:payload.user.id,username:payload.user.username,browsingLevel:payload.user.browsingLevel ?? null,blurNsfw:payload.user.blurNsfw ?? null} : null;
@@ -863,8 +894,10 @@ final class SiteSession: NSObject, ObservableObject, WKNavigationDelegate, WKUID
               let envelope = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw ClientError.invalidResponse }
         guard envelope["ok"] as? Bool == true else {
             let status = envelope["status"] as? Int ?? 500
-            if status == 401 { throw ClientError.signedOut }; throw ClientError.http(status)
+            try SiteRequestCooldown.shared.validateResponse(status: status, retryAfter: envelope["retryAfter"] as? String, markSuccess: false)
+            throw ClientError.invalidResponse
         }
+        if limitedRead { SiteRequestCooldown.shared.recordSuccess() }
         let payload = envelope["payload"] ?? NSNull()
         let payloadData = try JSONSerialization.data(withJSONObject: payload, options: [.fragmentsAllowed])
         return try decode(T.self, data: payloadData)

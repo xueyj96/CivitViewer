@@ -40,7 +40,7 @@ import Combine
         self.filter = filter ?? FeedFilter.saved(followed: followed)
         let authors = authors ?? .shared
         self.authors = authors
-        self.feed = feed ?? FeedStore(diagnostics: .shared, authorBlocks: authors)
+        self.feed = feed ?? FeedStore(diagnostics: .shared, observations: .shared, authorBlocks: authors)
         self.history = history ?? .shared
         self.dismissals = dismissals
         self.feed.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &observations)

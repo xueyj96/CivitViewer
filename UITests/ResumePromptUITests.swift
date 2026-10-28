@@ -38,7 +38,7 @@ final class ResumePromptUITests: XCTestCase {
         attachScreenshot(named: "details55-image-retry-outside-media-blur")
     }
 
-    func testTags56OnlyVerifiedSuggestionsWithCompleteCatalogRetained() {
+    func testTags57LocalObservationsWithCompleteCatalogAndNoProbes() {
         app = XCUIApplication()
         app.launchArguments = ["--qa-collection-paging", "--qa-theme-ui", "--qa-tag-availability55", "-muted", "YES"]
         app.launch()
@@ -56,20 +56,19 @@ final class ResumePromptUITests: XCTestCase {
         let toggle = app.segmentedControls["tag-directory.sparse-toggle"]
         XCTAssertTrue(toggle.isHittable); toggle.buttons["全部目录"].tap()
         XCTAssertTrue(sparse.waitForExistence(timeout: 5)); XCTAssertTrue(unknown.exists)
-        XCTAssertTrue(sparse.valueDescription.contains("当前可展示 0 条"))
-        XCTAssertTrue(unknown.valueDescription.contains("暂未核实"))
+        XCTAssertTrue(sparse.valueDescription.contains("近期搜索未显示作品"))
+        XCTAssertTrue(unknown.valueDescription.contains("暂无浏览样本"))
         sparse.tap()
-        toggle.buttons["有作品"].tap()
+        toggle.buttons["近期活跃"].tap()
         XCTAssertTrue(sparse.exists, "A selected sparse tag remains available after collapsing")
         XCTAssertTrue(sparse.valueDescription.contains("已选择"))
         XCTAssertFalse(unknown.exists)
-        waitUntil("Second candidate batch is checked without another manual tap") {
-            self.app.descendants(matching: .any)["qa.tag-availability55"].firstMatch.valueDescription.contains("checked=18;")
-        }
-        attachScreenshot(named: "tags56-verified-only-full-catalog-and-selected-state")
+        let readback = app.descendants(matching: .any)["qa.tag-availability55"].firstMatch.valueDescription
+        XCTAssertTrue(readback.contains("probeReads=0;"), "Tag estimates must not request per-tag works")
+        attachScreenshot(named: "tags57-local-observations-no-network-probes")
     }
 
-    func testTags56CompletedEmptySearchWithdrawsSuggestion() {
+    func testTags57CompletedEmptySearchWithdrawsLocalSuggestion() {
         app = XCUIApplication()
         app.launchArguments = ["--qa-collection-paging", "--qa-theme-ui", "--qa-tag-availability55", "--qa-tag-empty-result56", "-muted", "YES"]
         app.launch()
@@ -87,8 +86,8 @@ final class ResumePromptUITests: XCTestCase {
         app.buttons["search-tag-picker"].tap()
         XCTAssertTrue(tag.waitForNonExistence(timeout: 8), "An observed empty same-scope search withdraws cached positive evidence")
         app.segmentedControls["tag-directory.sparse-toggle"].buttons["全部目录"].tap()
-        XCTAssertTrue(tag.waitForExistence(timeout: 5)); XCTAssertTrue(tag.valueDescription.contains("搜索未取得可展示作品"))
-        attachScreenshot(named: "tags56-empty-result-feedback-withdraws-recommendation")
+        XCTAssertTrue(tag.waitForExistence(timeout: 5)); XCTAssertTrue(tag.valueDescription.contains("近期搜索未显示作品"))
+        attachScreenshot(named: "tags57-empty-result-feedback-withdraws-local-sample")
     }
 
     private func assertGrid55RetryLayout() {

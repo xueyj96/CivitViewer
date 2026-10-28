@@ -2,6 +2,8 @@ import Foundation
 
 @MainActor protocol FeedPageReading: AnyObject {
     var feedIdentity: String { get }
+    var tagEvidenceIdentity: String { get }
+    var siteRetryAvailableAt: Date? { get }
     func videoDurationMetadata(ids: [Int], postIDs: [Int], onlyPG: Bool) async throws -> [VideoDurationRecord]
     func mediaPage(filter: FeedFilter, cursor: String?, creator: Creator?, followed: Bool, includeTags: Bool) async throws -> MediaPage
     func collectionPage(id: Int, filter: FeedFilter, cursor: String?, allAccessibleLevels: Bool, includeTags: Bool) async throws -> MediaPage
@@ -22,6 +24,8 @@ import Foundation
 
 // Read-only doubles and readers without duration support retain UNKNOWN values.
 extension FeedPageReading {
+    var tagEvidenceIdentity: String { feedIdentity }
+    var siteRetryAvailableAt: Date? { nil }
     func videoDurationMetadata(ids: [Int], postIDs: [Int], onlyPG: Bool) async throws -> [VideoDurationRecord] { [] }
 
     /// Saved reading segments contain at most 30 works. Restore both bounded

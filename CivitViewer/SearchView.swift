@@ -110,7 +110,7 @@ struct SearchWorksView: View {
     @ObservedObject private var blocklist = TagBlocklist.shared
     @ObservedObject private var authorBlocks = AuthorBlocklist.shared
     @AppStorage("deduplicateMedia") private var deduplicateMedia = true
-    @StateObject private var feed = FeedStore(diagnostics: .shared, authorBlocks: .shared)
+    @StateObject private var feed = FeedStore(diagnostics: .shared, observations: .shared, authorBlocks: .shared)
     @State private var filter = FeedFilter(kind: .all, sort: "Newest", period: "AllTime")
     @State private var focused: Int?
     @State private var viewer: MediaItem?
@@ -162,7 +162,7 @@ struct SearchWorksView: View {
         if case .combined(let criteria) = target, criteria.author != nil || !criteria.normalizedText.isEmpty { return }
         let policy = TagAvailabilityPolicy(blockedTags: blocklist.names, blockedAuthorIDs: authorBlocks.blockedIDs,
             blockedAuthorHandles: authorBlocks.blockedHandles, deduplicateMediaAssets: deduplicateMedia)
-        TagMediaAvailability.shared.recordEmptySearch(tagID: target.selectedTags[0].id, identity: session.feedIdentity, policy: policy)
+        TagObservationStore.shared.recordEmpty(tagID: target.selectedTags[0].id, scope: session.tagEvidenceIdentity, policy: policy)
     }
     private func refreshFeed() async {
         if await feed.restartCurrentFeed(session: session)?.status == .committed { focused = feed.items.first?.id }

@@ -66,7 +66,7 @@ import CryptoKit
         guard manual || autoEnabled else { return }
         guard manual || !pausedByUser else { return }
         guard canNetwork else { status = wifiOnly ? "等待 Wi-Fi 同步标签" : "离线，仍可查询本地标签"; return }
-        guard manual || Date() >= retryAfter else { return }
+        guard Date() >= retryAfter else { status = "同步冷却中，已有标签仍可查询"; return }
         if manual { pausedByUser = false }
         guard ownerKey == Self.key(source.tagLibraryOwnerID), database != nil else { status = "正在准备当前账号的标签库"; return }
         if busy {
@@ -136,7 +136,7 @@ import CryptoKit
                 try await db.storeCommon(common, now: Date())
                 try await refresh(db, run: run)
             }
-            for _ in 0..<(preferred == nil ? 8 : 3) {
+            for _ in 0..<2 {
                 try check(source: source, identity: identity, run: run)
                 guard let work = try await db.nextWork(now: Date(), refreshAfter: 86_400, preferredPrefix: preferred) else { status = "已完成本轮复查，等待下次更新"; return }
                 status = "同步 \(work.prefix.uppercased()) · 第 \(work.page) 页"
@@ -145,7 +145,7 @@ import CryptoKit
                 let completed = try await db.commit(work: work, tags: tags, pageSize: 200, now: Date())
                 try await refresh(db, run: run)
                 if preferred != nil && completed { break }
-                try await Task.sleep(for: .milliseconds(750))
+                try await Task.sleep(for: .seconds(3))
             }
             status = "本批已保存，下批从断点继续"; retryAfter = .distantPast
         } catch is CancellationError { /* The completed page checkpoint is durable. */ }

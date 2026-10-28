@@ -44,6 +44,7 @@ final class FeedStore: ObservableObject {
     private var authorBlockObserver: AnyCancellable?
     private var assetPolicyOverride: Bool?
     private let diagnostics: LocalDiagnosticsStore?
+    private let observations: TagObservationStore?
     private let now: @MainActor () -> Date
     private let slicePause: @MainActor (Int) async throws -> Void
     private var consecutiveRequestFailures = 0
@@ -89,7 +90,7 @@ final class FeedStore: ObservableObject {
         assetPolicyOverride ?? (preferences.object(forKey: "deduplicateMedia") as? Bool ?? true)
     }
 
-    init(preferences: UserDefaults = .standard, diagnostics: LocalDiagnosticsStore? = nil,
+    init(preferences: UserDefaults = .standard, diagnostics: LocalDiagnosticsStore? = nil, observations: TagObservationStore? = nil,
          authorBlocks: AuthorBlocklist? = nil,
          now: @escaping @MainActor () -> Date = { Date() },
          slicePause: @escaping @MainActor (Int) async throws -> Void = { slice in
@@ -97,6 +98,7 @@ final class FeedStore: ObservableObject {
          }) {
         self.preferences = preferences
         self.diagnostics = diagnostics
+        self.observations = observations
         self.authorBlocks = authorBlocks
         self.now = now
         self.slicePause = slicePause
@@ -323,6 +325,10 @@ final class FeedStore: ObservableObject {
                 let count = accumulator.items.count
                 accumulator.append(page, kind: filter.effectiveKind)
                 items = accumulator.items; reachedEnd = accumulator.reachedEnd
+                let pageIDs = Set(page.items.map(\.id))
+                observations?.observe(items: items.filter { pageIDs.contains($0.id) }, scope: session.tagEvidenceIdentity,
+                    policy: .init(blockedTags: blockedTags, blockedAuthorIDs: authorSnapshot.ids,
+                                  blockedAuthorHandles: authorSnapshot.handles, deduplicateMediaAssets: deduplicateMediaAssets))
                 noteTagResult(page: page, key: activeKey, visible: items.count)
                 hiddenByDuration = accumulator.hiddenByDuration; unverifiedDuration = accumulator.unverifiedDuration
                 hiddenByTags = accumulator.blockedCount; unverifiedTags = accumulator.unverifiedCount
@@ -365,7 +371,8 @@ final class FeedStore: ObservableObject {
                 consecutiveRequestFailures = min(6, consecutiveRequestFailures + 1)
                 let rateLimited: Bool = if case ClientError.http(429) = error { true } else { false }
                 let delay = min(rateLimited ? 30.0 : 8.0, (rateLimited ? 3.0 : 0.5) * pow(2, Double(consecutiveRequestFailures - 1)))
-                continuationState = .failed(.request(message: error.localizedDescription, retryAfter: now().addingTimeInterval(delay)))
+                let retry = rateLimited ? max(now().addingTimeInterval(delay), session.siteRetryAvailableAt ?? now()) : now().addingTimeInterval(delay)
+                continuationState = .failed(.request(message: error.localizedDescription, retryAfter: retry))
                 let area: DiagnosticArea = if case .search = source { .search } else { .playback }
                 if case ClientError.http(let status) = error { diagnostics?.note(area: area, code: .http, httpStatus: status) }
                 else { diagnostics?.note(area: area, code: .loadFailed) }
@@ -534,6 +541,9 @@ final class FeedStore: ObservableObject {
             self.configured = true
             self.accumulator = staged
             self.items = staged.items
+            self.observations?.observe(items: staged.items, scope: session.tagEvidenceIdentity,
+                policy: .init(blockedTags: finalBlockedTags, blockedAuthorIDs: finalAuthorSnapshot.ids,
+                              blockedAuthorHandles: finalAuthorSnapshot.handles, deduplicateMediaAssets: finalAssetPolicy))
             self.reachedEnd = staged.reachedEnd
             self.seenCursors = stagedCursors
             self.searchProgress = stagedProgress
@@ -562,7 +572,7 @@ final class FeedStore: ObservableObject {
             let rateLimited: Bool = if case ClientError.http(429) = error { true } else { false }
             let delay = min(rateLimited ? 30.0 : 8.0, (rateLimited ? 3.0 : 0.5) * pow(2, Double(consecutiveRestartFailures - 1)))
             restartRetryKey = key; restartRetryError = error.localizedDescription
-            restartRetryAvailableAt = now().addingTimeInterval(delay)
+            restartRetryAvailableAt = rateLimited ? max(now().addingTimeInterval(delay), session.siteRetryAvailableAt ?? now()) : now().addingTimeInterval(delay)
             return finish(.failedRetainingPrevious, error: error.localizedDescription)
         }
     }

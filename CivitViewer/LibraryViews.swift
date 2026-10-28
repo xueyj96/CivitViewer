@@ -128,7 +128,7 @@ struct CreatorView: View {
     @EnvironmentObject private var session: SiteSession
     @ObservedObject private var blocklist = TagBlocklist.shared
     @ObservedObject private var authorBlocklist = AuthorBlocklist.shared
-    @StateObject private var feed = FeedStore(diagnostics: .shared, authorBlocks: AuthorBlocklist.shared)
+    @StateObject private var feed = FeedStore(diagnostics: .shared, observations: .shared, authorBlocks: AuthorBlocklist.shared)
     @State private var filter: FeedFilter
     @State private var showFilter = false
     @State private var focused: Int?
