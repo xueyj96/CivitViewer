@@ -1,0 +1,11 @@
+Source: https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz
+Detached signature: https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz.asc
+Official key: https://ffmpeg.org/ffmpeg-devel.asc
+
+Archive SHA-256: 8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e
+Signature state: VERIFIED with the official RSA key below using the system OpenSSL verifier and the OpenPGP v4 packet fields; the bundled build script repeats this check before building.
+Primary-key fingerprint: FCF986EA15E6E293A5644F10B4322F04D67658D8
+Verified at: 2026-10-28 (Asia/Singapore)
+
+Public key SHA-256: 397b3becedcd5a98769967ff1ff8501ddc89f8368b8f766e4701377d7dbaabe5
+Build profile status: both arm64 iOS device and arm64 iOS simulator static-library builds completed with iOS 17.0 minimum deployment targets.

@@ -1,0 +1,4 @@
+framework module CivitMediaEngine {
+  umbrella header "CivitMediaEngine.h"
+  export *
+}

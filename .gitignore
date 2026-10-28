@@ -1,0 +1,37 @@
+/build/
+/DerivedData/
+*.xcuserstate
+xcuserdata/
+.DS_Store
+/research/
+/design/
+
+# Local screenshots, account setup notes, and delivery records.
+/*.png
+/Google登录一次性配置.txt
+/delivery-status.json
+
+# Regenerable FFmpeg products; retain the exact build configurations.
+/Vendor/FFmpeg/work/
+/Vendor/FFmpeg/build/*
+!/Vendor/FFmpeg/build/ios-arm64/
+!/Vendor/FFmpeg/build/ios-simulator-arm64/
+/Vendor/FFmpeg/build/ios-arm64/*
+/Vendor/FFmpeg/build/ios-simulator-arm64/*
+!/Vendor/FFmpeg/build/ios-arm64/build-configuration.txt
+!/Vendor/FFmpeg/build/ios-simulator-arm64/build-configuration.txt
+
+# Credentials and signing material never belong in source control.
+.env
+.env.*
+!.env.example
+*.mobileprovision
+*.provisionprofile
+*.p12
+*.pfx
+*.key
+*.pem
+*.ipa
+*.xcarchive/
+__pycache__/
+*.pyc
