@@ -36,8 +36,14 @@ struct MediaSearchCriteria: Hashable, Identifiable {
             if username.lowercased() != author.username.lowercased() { return false }
         }
         if !tags.isEmpty {
-            guard let actual = item.tags, actual.allSatisfy({ $0.id != nil }) else { throw ClientError.format("多标签搜索元数据待核实") }
-            if !tagIDs.isSubset(of: Set(actual.compactMap(\.id))) { return false }
+            guard let actual = item.tags else { throw ClientError.format("多标签搜索元数据待核实") }
+            let known = Set(actual.compactMap(\.id))
+            // Known required IDs are sufficient positive evidence. Unknown IDs
+            // on unrelated labels cannot invalidate those witnessed matches.
+            if !tagIDs.isSubset(of: known) {
+                guard actual.allSatisfy({ $0.id != nil }) else { throw ClientError.format("多标签搜索元数据待核实") }
+                return false
+            }
         }
         return true
     }

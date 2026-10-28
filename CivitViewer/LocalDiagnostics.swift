@@ -25,6 +25,7 @@ enum DiagnosticCode: String, Codable, CaseIterable, Identifiable {
     case repairStarted, repairCompleted, repairedVideoPlaying
     case posterLoaded, posterFailed, posterCaptured
     case posterOpened, posterStarted, posterCancelled, posterCaptureStarted, posterDeferred
+    case tagProbe, tagSearch
     var id: Self { self }
     var title: String {
         switch self {
@@ -54,7 +55,42 @@ enum DiagnosticCode: String, Codable, CaseIterable, Identifiable {
         case .posterCancelled: "封面读取已取消"
         case .posterCaptureStarted: "播放画面提取开始"
         case .posterDeferred: "等待提取封面"
+        case .tagProbe: "标签可展示作品核对"
+        case .tagSearch: "标签作品查询"
         }
+    }
+}
+
+/// Numeric IDs and finite query descriptors only. No tag names, account IDs,
+/// text, media addresses, cursors, request bodies or authentication material.
+struct TagSearchDiagnostic: Codable, Hashable {
+    let stage: String
+    let tagIDs: [Int]
+    let outcome: String
+    let reason: String
+    let rawCount: Int
+    let visibleCount: Int?
+    let pages: Int
+    let hasMore: Bool
+    let browsingLevel: Int?
+    let kind: String
+    let period: String
+    let hasAuthor: Bool
+    let hasText: Bool
+    let blockedTags: Int
+    let blockedAuthors: Int
+    var matchedCount: Int? = nil
+    private static let outcomes: Set<String> = ["enough", "sparse", "unknown", "page", "error"]
+    private static let reasons: Set<String> = ["thresholdReached", "exhausted", "pageLimit", "requestFailed", "http", "tagMismatch", "invalidMedia", "repeatedPage", "repeatedCursor", "metadataMissing", "contextChanged", "cancelled", "response", "searchEmpty", "authUnavailable"]
+    var isBounded: Bool {
+        ["availability", "upstream", "visible"].contains(stage) && (1...8).contains(tagIDs.count) && tagIDs.allSatisfy { $0 > 0 } && Set(tagIDs).count == tagIDs.count &&
+        Self.outcomes.contains(outcome) && Self.reasons.contains(reason) && (0...1_000).contains(rawCount) &&
+        (visibleCount.map { (0...1_000_000).contains($0) } ?? true) && (matchedCount.map { (0...1_000).contains($0) } ?? true) && (0...16).contains(pages) &&
+        (browsingLevel.map { (0...31).contains($0) } ?? true) && ["all", "image", "video"].contains(kind) &&
+        ["AllTime", "Year", "Month", "Week", "Day"].contains(period) && (0...10_000).contains(blockedTags) && (0...200).contains(blockedAuthors)
+    }
+    var summary: String {
+        "\(stage) · 标签 \(tagIDs.map(String.init).joined(separator: ",")) · \(outcome)/\(reason) · 上游 \(rawCount) / 标签匹配 \(matchedCount.map(String.init) ?? "待核实") / 可展示 \(visibleCount.map(String.init) ?? "待核实") · 页 \(pages) · 后续 \(hasMore) · \(kind)/\(period) · 作者条件 \(hasAuthor) / 文本条件 \(hasText)"
     }
 }
 
@@ -69,6 +105,7 @@ struct DiagnosticEntry: Codable, Equatable, Identifiable {
     let count: Int?
     let suppressed: Int
     let playback: PlaybackFailureDiagnostic?
+    var tagSearch: TagSearchDiagnostic? = nil
 }
 
 actor LocalDiagnosticsStore {
@@ -85,6 +122,7 @@ actor LocalDiagnosticsStore {
         let code: DiagnosticCode
         let status: Int?
         let playback: PlaybackFailureDiagnostic?
+        let tagSearch: TagSearchDiagnostic?
     }
     private struct Export: Codable {
         let schemaVersion: Int
@@ -112,8 +150,8 @@ actor LocalDiagnosticsStore {
 
     static let shared = LocalDiagnosticsStore(fileURL: defaultFileURL, build: Int(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "") ?? 0)
 
-    nonisolated func note(area: DiagnosticArea, code: DiagnosticCode, httpStatus: Int? = nil, count: Int? = nil, playback: PlaybackFailureDiagnostic? = nil) {
-        Task { await self.record(area: area, code: code, httpStatus: httpStatus, count: count, playback: playback) }
+    nonisolated func note(area: DiagnosticArea, code: DiagnosticCode, httpStatus: Int? = nil, count: Int? = nil, playback: PlaybackFailureDiagnostic? = nil, tagSearch: TagSearchDiagnostic? = nil) {
+        Task { await self.record(area: area, code: code, httpStatus: httpStatus, count: count, playback: playback, tagSearch: tagSearch) }
     }
 
     private static var defaultFileURL: URL {
@@ -124,7 +162,7 @@ actor LocalDiagnosticsStore {
             .appendingPathComponent("diagnostics-0.jsonl")
     }
 
-    func record(area: DiagnosticArea, code: DiagnosticCode, httpStatus: Int? = nil, count: Int? = nil, playback: PlaybackFailureDiagnostic? = nil) async {
+    func record(area: DiagnosticArea, code: DiagnosticCode, httpStatus: Int? = nil, count: Int? = nil, playback: PlaybackFailureDiagnostic? = nil, tagSearch: TagSearchDiagnostic? = nil) async {
         do { try ensureLoaded() } catch { return }
         let timestamp = now()
         pruneRateState(at: timestamp)
@@ -133,7 +171,8 @@ actor LocalDiagnosticsStore {
             (area == .thumbnail && [.posterLoaded, .posterFailed, .posterCaptured, .posterOpened,
                                    .posterStarted, .posterCancelled, .posterCaptureStarted, .posterDeferred].contains(code))
         let safePlayback = allowsContext && playback?.isBounded == true ? playback : nil
-        let rateKey = RateKey(area: area, code: code, status: safeStatus, playback: safePlayback)
+        let safeTagSearch = area == .search && [.tagProbe, .tagSearch].contains(code) && tagSearch?.isBounded == true ? tagSearch : nil
+        let rateKey = RateKey(area: area, code: code, status: safeStatus, playback: safePlayback, tagSearch: safeTagSearch)
         if let previous = perKeyLastWrite[rateKey], timestamp.timeIntervalSince(previous) < 10 {
             suppressedCount = min(1_000_000, suppressedCount + 1)
             return
@@ -144,7 +183,7 @@ actor LocalDiagnosticsStore {
         }
         let entry = DiagnosticEntry(id: UUID(), timestamp: timestamp, processSession: Self.processSessionID,
                                     build: build, area: area, code: code, httpStatus: safeStatus,
-                                    count: count.map { min(1_000_000_000, max(0, $0)) }, suppressed: suppressedCount, playback: safePlayback)
+                                    count: count.map { min(1_000_000_000, max(0, $0)) }, suppressed: suppressedCount, playback: safePlayback, tagSearch: safeTagSearch)
         let previouslySuppressed = suppressedCount
         suppressedCount = 0
         do {
@@ -240,7 +279,7 @@ actor LocalDiagnosticsStore {
     private func decodeEntry(_ data: Data) throws -> DiagnosticEntry {
         let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
         let entry = try decoder.decode(DiagnosticEntry.self, from: data)
-        guard entry.playback?.isBounded != false else { throw CocoaError(.coderReadCorrupt) }
+        guard entry.playback?.isBounded != false, entry.tagSearch?.isBounded != false else { throw CocoaError(.coderReadCorrupt) }
         return entry
     }
 

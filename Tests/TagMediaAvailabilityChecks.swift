@@ -23,11 +23,12 @@ import Foundation
     @MainActor static func main() async throws {
         var checks = 0
         func check(_ yes: @autoclosure () -> Bool, _ why: String) { checks += 1; precondition(yes(), why) }
-        func page(_ tag: Int, _ ids: [Int], _ cursor: String? = nil, _ types: [String] = []) -> MediaPage {
+        func page(_ tag: Int, _ ids: [Int], _ cursor: String? = nil, _ types: [String] = [], url: String? = nil,
+                  tagName: String? = "fixture", creatorID: Int? = nil) -> MediaPage {
             let items = ids.enumerated().map { index, id in
-                MediaItem(id: id, url: "https://fake.invalid/\(id)", width: 1, height: 1,
+                MediaItem(id: id, url: url ?? "https://image.civitai.com/x/\(id)", width: 1, height: 1,
                     type: types.indices.contains(index) ? types[index] : "image", username: "fixture", browsingLevel: 1,
-                    thumbnail: nil, creatorID: nil, tags: [.init(id: tag, name: "fixture")], postID: nil, metadata: nil)
+                    thumbnail: nil, creatorID: creatorID, tags: [.init(id: tag, name: tagName)], postID: nil, metadata: nil)
             }
             return .init(items: items, metadata: .init(nextCursor: cursor))
         }
@@ -36,7 +37,8 @@ import Foundation
         source.handler = { id,_,_ in id == 1 ? page(id,[1,2,3]) : page(id,[]) }
         await store.verify(tags: [.init(id: 1,name:"enough"),.init(id: 2,name:"zero")], source: source)
         check(store.result(tagID: 1,identity:"acct-A")?.state == .enough, "Three unique valid media establishes enough")
-        check(store.result(tagID: 1,identity:"acct-A")?.countLowerBound == 3 && source.calls.allSatisfy{$0.2 == 3 && $0.3.kind == .all && $0.3.sort == "Newest" && $0.3.period == "AllTime" && !$0.3.onlyPG && $0.3.baseModel.isEmpty && $0.3.videoDurationRange == nil && $0.4}, "Probe uses the exact tag-directory metadata request scope")
+        check(store.isRecommended(tagID: 1, identity: "acct-A"), "Only enough results are recommended")
+        check(store.result(tagID: 1,identity:"acct-A")?.countLowerBound == 3 && source.calls.allSatisfy{$0.2 == 20 && $0.3.kind == .all && $0.3.sort == "Newest" && $0.3.period == "AllTime" && !$0.3.onlyPG && $0.3.baseModel.isEmpty && $0.3.videoDurationRange == nil && $0.4}, "Probe uses the same page size and scope as normal single-tag search")
         let zero = store.result(tagID: 2,identity:"acct-A")
         check(zero?.state == .sparse && zero?.exhausted == true && zero?.countLowerBound == 0, "Empty exhausted feed is sparse")
         source.handler = { id,cursor,_ in
@@ -47,6 +49,74 @@ import Foundation
         await store.verify(tags: [.init(id:3,name:"two"),.init(id:4,name:"cursor-empty")],source:source)
         check(store.result(tagID:3,identity:"acct-A")?.state == .sparse && store.result(tagID:3,identity:"acct-A")?.countLowerBound == 2, "Two unique items at exhausted end is sparse")
         check(store.result(tagID:4,identity:"acct-A")?.state == .unknown && source.calls.filter{$0.0 == 4}.count == 3, "Empty pages with cursors continue but page cap stays unknown")
+
+        let parityPage = page(5, [501, 502, 503])
+        var realAccumulator = FeedAccumulator(blockedTags: [], deduplicateMediaAssets: true)
+        realAccumulator.append(parityPage)
+        source.handler = { _,_,_ in parityPage }
+        await store.verify(tags: [.init(id: 5, name: "parity")], source: source)
+        check(store.result(tagID: 5, identity: "acct-A")?.countLowerBound == realAccumulator.items.count,
+              "Probe threshold count matches the real FeedAccumulator on the same page")
+        check(store.result(tagID: 5, identity: "acct-A")?.reason == .thresholdReached, "Threshold result has an explicit reason")
+        var partialItems = parityPage.items
+        for index in partialItems.indices { partialItems[index].tags?.append(.init(id: nil, name: "unrelated")) }
+        let partialPage = MediaPage(items: partialItems, metadata: .init(nextCursor: nil))
+        let partialStore = TagMediaAvailability()
+        source.handler = { _,_,_ in partialPage }
+        await partialStore.verify(tags: [.init(id: 5, name: "parity")], source: source)
+        check(partialStore.isRecommended(tagID: 5, identity: "acct-A") &&
+              (try? partialPage.items.allSatisfy { try MediaSearchCriteria(tags:[.init(id:5,name:"parity")]).matches($0) }) == true,
+              "Availability and normal criteria both accept witnessed IDs with unrelated incomplete labels")
+
+        let validityStore = TagMediaAvailability()
+        source.handler = { id,_,_ in page(id, [601,602,603], url: "") }
+        await validityStore.verify(tags: [.init(id: 6, name: "empty url")], source: source)
+        check(validityStore.result(tagID: 6, identity: "acct-A")?.state == .unknown &&
+              validityStore.result(tagID: 6, identity: "acct-A")?.reason == .metadataMissing,
+              "Empty media URLs remain UNKNOWN and cannot establish displayable availability")
+        source.handler = { id,_,_ in page(id, [611,612,613]) }
+        await validityStore.verify(tags: [.init(id: 7, name: "https")], source: source)
+        check(validityStore.isRecommended(tagID: 7, identity: "acct-A"), "Valid HTTPS media URLs can establish availability")
+
+        let policyStore = TagMediaAvailability()
+        source.handler = { id,_,_ in page(id, [701,702,703], creatorID: 77) }
+        let blockedAuthor = TagAvailabilityPolicy(blockedAuthorIDs: [77])
+        await policyStore.verify(tags: [.init(id: 70, name: "author blocked")], source: source, policy: blockedAuthor)
+        check(policyStore.result(tagID: 70, identity: "acct-A", policy: blockedAuthor)?.countLowerBound == 0,
+              "Blocked authors are filtered by FeedAccumulator")
+        let blockedTag = TagAvailabilityPolicy(blockedTags: ["fixture"])
+        await policyStore.verify(tags: [.init(id: 70, name: "tag blocked")], source: source, policy: blockedTag)
+        check(policyStore.result(tagID: 70, identity: "acct-A", policy: blockedTag)?.state == .sparse,
+              "Blocked tags are filtered by FeedAccumulator")
+        source.handler = { id,_,_ in page(id, [711,712,713], tagName: nil) }
+        let missingNames = TagAvailabilityPolicy(blockedTags: ["blocked"])
+        await policyStore.verify(tags: [.init(id: 71, name: "missing names")], source: source, policy: missingNames)
+        check(policyStore.result(tagID: 71, identity: "acct-A", policy: missingNames)?.reason == .metadataMissing,
+              "Missing tag names with a nonempty blocklist stay UNKNOWN")
+        check(policyStore.result(tagID: 70, identity: "acct-A", policy: .init()) == nil &&
+              policyStore.result(tagID: 70, identity: "acct-A", policy: blockedTag) != nil,
+              "Policy changes use a distinct cache key")
+
+        let duplicateAssetStore = TagMediaAvailability()
+        source.handler = { id,_,_ in page(id, [801,802,803], url: "https://image.civitai.com/x/shared") }
+        await duplicateAssetStore.verify(tags: [.init(id: 80, name: "dedup")], source: source)
+        let dedupResult = duplicateAssetStore.result(tagID: 80, identity: "acct-A")
+        check(dedupResult?.state == .sparse && dedupResult?.countLowerBound == 1,
+              "Three IDs sharing one media asset deduplicate to one visible item")
+        let noDedup = TagAvailabilityPolicy(deduplicateMediaAssets: false)
+        await duplicateAssetStore.verify(tags: [.init(id: 80, name: "dedup off")], source: source, policy: noDedup)
+        check(duplicateAssetStore.isRecommended(tagID: 80, identity: "acct-A", policy: noDedup),
+              "Disabling media asset deduplication admits three unique IDs")
+
+        let nilTypeStore = TagMediaAvailability()
+        source.handler = { id,_,_ in
+            let first = MediaItem(id: 901, url: "https://image.civitai.com/x/901", width: 1, height: 1, type: nil,
+                username: "fixture", browsingLevel: 1, thumbnail: nil, creatorID: nil, tags: [.init(id: id, name: "fixture")], postID: nil, metadata: nil)
+            let rest = page(id, [902,903]).items
+            return .init(items: [first] + rest, metadata: .init(nextCursor: nil))
+        }
+        await nilTypeStore.verify(tags: [.init(id: 90, name: "nil type")], source: source)
+        check(nilTypeStore.isRecommended(tagID: 90, identity: "acct-A"), "Nil media type follows real isSupported behavior")
 
         let cases: [(String,(Int,String?,Int) async throws -> MediaPage)] = [
             ("network", {_,_,_ in throw URLError(.timedOut)}),
@@ -63,6 +133,14 @@ import Foundation
             check(store.result(tagID:id,identity:"acct-A")?.state == .unknown, "\(item.0) stays UNKNOWN")
             if item.0 == "duplicate-page" { check(source.calls.filter { $0.0 == id }.count == 2, "Repeated-page case actually reads both correctly scoped pages") }
         }
+        source.handler = { _,_,_ in throw ClientError.http(503) }
+        await store.verify(tags: [.init(id: 20, name: "http")], source: source)
+        check(store.result(tagID: 20, identity: "acct-A")?.reason == .http &&
+              store.result(tagID: 20, identity: "acct-A")?.httpStatus == 503,
+              "HTTP failures preserve the status and remain UNKNOWN")
+        let pageLimitResult = store.result(tagID: 4, identity: "acct-A")
+        check(pageLimitResult?.reason == .pageLimit && pageLimitResult?.pages == 3 && pageLimitResult?.hasMore == true,
+              "Page budget exhaustion reports page count and remaining cursor")
         source.feedIdentity = "acct-B"
         check(store.result(tagID:1,identity:"acct-B") == nil && store.result(tagID:1,identity:"acct-A")?.state == .enough, "Cache is isolated by feed identity")
         source.handler = { id,_,_ in page(id,[]) }
@@ -136,6 +214,14 @@ import Foundation
         }
 
         let capped = TagMediaAvailability(maxEntries: 2, maxTagsPerBatch: 12, now:{clock})
+        let laterValid = AvailabilityFake(), laterStore = TagMediaAvailability()
+        laterValid.handler = { id,cursor,_ in cursor == nil ? page(id,[501],"valid-next",url: "") : page(id,[502,503,504]) }
+        await laterStore.verify(tags:[.init(id:501,name:"bad first row then valid witnesses")],source:laterValid)
+        check(laterStore.isRecommended(tagID:501,identity:"acct-A") && laterValid.calls.count == 2,
+              "An unusable early row cannot suppress three valid later witnesses within the scan budget")
+        laterStore.recordEmptySearch(tagID:501,identity:"acct-A",policy:.init())
+        check(!laterStore.isRecommended(tagID:501,identity:"acct-A") && laterStore.result(tagID:501,identity:"acct-A")?.reason == .searchEmpty,
+              "A confirmed empty same-scope search immediately withdraws a cached recommendation without claiming global zero")
         await capped.verify(tags:(101...103).map{.init(id:$0,name:"\($0)")},source:source)
         check(capped.checkedCount(identity:"acct-B") == 2, "Cache evicts to configured cap")
         let limitedSource = AvailabilityFake(), limited = TagMediaAvailability()

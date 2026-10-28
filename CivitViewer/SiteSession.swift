@@ -71,7 +71,7 @@ final class SiteSession: NSObject, ObservableObject, WKNavigationDelegate, WKUID
     func configureForCollectionPagingQA() {
         guard CollectionPagingQA.enabled else { return }
         if ProcessInfo.processInfo.arguments.contains("--qa-tag-availability55") {
-            UserDefaults.standard.set(false, forKey: "tagDirectory.showSparse")
+            UserDefaults.standard.set(false, forKey: "tagDirectory.showCatalog56")
         }
         account = Account(id: CollectionPagingQA.ownerID, username: "PagingFixture", browsingLevel: 1,
                           blurNsfw: ProcessInfo.processInfo.arguments.contains("--qa-image-failure55"))
@@ -493,6 +493,9 @@ final class SiteSession: NSObject, ObservableObject, WKNavigationDelegate, WKUID
 
     func searchMediaPage(target: MediaSearchTarget, filter: FeedFilter, cursor: String?, includeTags: Bool) async throws -> MediaPage {
         #if DEBUG && targetEnvironment(simulator)
+        if CollectionPagingQA.enabled && ProcessInfo.processInfo.arguments.contains("--qa-tag-empty-result56") {
+            return .init(items: [], metadata: .init(nextCursor: nil))
+        }
         if ViewportAuditQA.enabled { return try ViewportAuditQA.searchPage(target: target, filter: filter, cursor: cursor) }
         #endif
         switch target {
@@ -531,27 +534,47 @@ final class SiteSession: NSObject, ObservableObject, WKNavigationDelegate, WKUID
     func tagCandidates(tagID: Int, author: Creator?, filter: FeedFilter, cursor: String?, limit: Int) async throws -> MediaPage {
         guard tagID > 0, (1...100).contains(limit) else { throw ClientError.invalidResponse }
         #if DEBUG && targetEnvironment(simulator)
-        if CollectionPagingQA.enabled && ProcessInfo.processInfo.arguments.contains("--qa-tag-availability55") {
-            if tagID == 42_002 { return .init(items: [], metadata: .init(nextCursor: nil)) }
-            if tagID == 42_003 { throw URLError(.timedOut) }
+        if CollectionPagingQA.enabled && (ProcessInfo.processInfo.arguments.contains("--qa-tag-availability55") || ProcessInfo.processInfo.arguments.contains("--qa-style48")) {
+            if ProcessInfo.processInfo.arguments.contains("--qa-tag-availability55"), tagID == 42_002 { return .init(items: [], metadata: .init(nextCursor: nil)) }
+            if ProcessInfo.processInfo.arguments.contains("--qa-tag-availability55"), tagID == 42_003 { throw URLError(.timedOut) }
             let items = (0..<3).map { offset in
-                MediaItem(id: 55_100 + offset, url: "", width: 1, height: 1, type: offset == 0 ? "video" : "image",
+                MediaItem(id: 55_100 + offset, url: "https://example.invalid/tag-fixture/\(tagID)/\(offset)", width: 1, height: 1, type: offset == 0 ? "video" : "image",
                           username: "LocalFixture", browsingLevel: 1, thumbnail: nil, tags: [.init(id: tagID, name: "fixture")])
             }
             return .init(items: items, metadata: .init(nextCursor: nil))
         }
         #endif
-        return try await scopedSearchMedia(filter: filter, cursor: cursor, extra: [.init(name: "tags", value: String(tagID))], includeTags: true, creator: author, limit: limit)
+        return try await scopedSearchMedia(filter: filter, cursor: cursor, extra: [.init(name: "tags", value: String(tagID))], includeTags: true, creator: author, limit: limit, recordTagRequest: false)
     }
 
-    private func scopedSearchMedia(filter: FeedFilter, cursor: String?, extra: [URLQueryItem], includeTags: Bool, creator: Creator? = nil, limit: Int = 20) async throws -> MediaPage {
+    private func scopedSearchMedia(filter: FeedFilter, cursor: String?, extra: [URLQueryItem], includeTags: Bool, creator: Creator? = nil, limit: Int = 20, recordTagRequest: Bool = true) async throws -> MediaPage {
         var components = URLComponents(string: "/api/v1/images")!
         components.queryItems = filter.query(cursor: cursor, creator: creator) + extra
         components.queryItems?.removeAll { $0.name == "limit" }
         components.queryItems?.append(.init(name: "limit", value: String(limit)))
         if includeTags { components.queryItems?.append(.init(name: "withTags", value: "true")) }
         if !filter.onlyPG { components.queryItems?.append(.init(name: "browsingLevel", value: String(account?.browsingLevel ?? 1))) }
-        return try await request(path: components.string!)
+        let ids = Set(extra.filter { $0.name == "tags" }.flatMap { ($0.value ?? "").split(separator: ",").compactMap { Int($0) } })
+        func note(_ page: MediaPage?, error: Error? = nil) {
+            guard recordTagRequest, !ids.isEmpty else { return }
+            let status: Int? = if case ClientError.http(let value)? = error { value } else { nil }
+            let matched = page.map { p in p.items.filter { ids.isSubset(of: Set(($0.tags ?? []).compactMap(\.id))) }.count }
+            let context = TagSearchDiagnostic(stage: "upstream", tagIDs: ids.sorted(), outcome: error == nil ? "page" : "error",
+                reason: error == nil ? (matched == page?.items.count ? "response" : "tagMismatch") : (status == nil ? "requestFailed" : "http"),
+                rawCount: page?.items.count ?? 0, visibleCount: nil, pages: 1, hasMore: page?.metadata.nextCursor != nil,
+                browsingLevel: filter.onlyPG ? 1 : (account?.browsingLevel ?? 1), kind: filter.effectiveKind.rawValue, period: filter.period,
+                hasAuthor: creator != nil, hasText: false, blockedTags: TagBlocklist.shared.names.count, blockedAuthors: AuthorBlocklist.shared.blockedIDs.count,
+                matchedCount: matched)
+            LocalDiagnosticsStore.shared.note(area: .search, code: .tagSearch, httpStatus: status, tagSearch: context)
+        }
+        do {
+            let page: MediaPage = try await request(path: components.string!)
+            note(page)
+            return page
+        } catch {
+            if !Task.isCancelled { note(nil, error: error) }
+            throw error
+        }
     }
 
     func saveBrowsingPreferences(level: Int, blur: Bool?) async -> Bool {

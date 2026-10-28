@@ -163,7 +163,12 @@ import Foundation
         }
         check(badTag.requests.count == 1 && badAuthor.requests.allSatisfy { $0.authorID == author.id }, "Scope mismatches fail after one bounded request with author passed through")
 
-        // Partial tag metadata is an error, never a permissive match.
+        // Missing required IDs stay unverified; unrelated missing IDs cannot
+        // invalidate an intersection whose selected IDs are all witnessed.
+        let witnessedMetadata = CandidateStub()
+        witnessedMetadata.fetch = { _ in page([item(8_000,[71,72],missingTagMetadata:true)], nil) }
+        let witnessedPage = try await TagConjunctionPager.page(criteria: criteria([71,72]), filter: filter, cursor: nil, source: witnessedMetadata)
+        check(witnessedPage.items.map(\.id) == [8_000], "Witnessed required IDs survive unrelated partial metadata")
         let missingMetadata = CandidateStub()
         missingMetadata.fetch = { _ in page([item(8_001,[71],missingTagMetadata:true)], nil) }
         try await expectClientError("format") {

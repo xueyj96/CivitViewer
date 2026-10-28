@@ -12,7 +12,10 @@ struct CivitViewerApp: App {
     var body: some Scene {
         WindowGroup {
             Group {
-            #if DEBUG && targetEnvironment(simulator)
+            #if DEBUG
+            if AppReadback.tagMediaRequested { TagMetadataReadbackView().environmentObject(session) }
+            else {
+            #if targetEnvironment(simulator)
             if ProcessInfo.processInfo.arguments.contains("--qa-grid-retry55") { GridRetryQAView() }
             else if ProcessInfo.processInfo.arguments.contains("--qa-preparation48") { VideoPreparationOverlayQAView() }
             else if CollectionPagingQA.enabled { CollectionPagingQAView().environmentObject(session).environmentObject(session.oauth) }
@@ -20,6 +23,10 @@ struct CivitViewerApp: App {
             else if MediaFormatQA.enabled { MediaFormatQAView().environmentObject(session).environmentObject(session.oauth) }
             else if PlaybackLayoutQA.enabled { PlaybackLayoutQAView().environmentObject(session).environmentObject(session.oauth) }
             else { RootView().environmentObject(session).environmentObject(session.oauth) }
+            #else
+            RootView().environmentObject(session).environmentObject(session.oauth)
+            #endif
+            }
             #else
             RootView().environmentObject(session).environmentObject(session.oauth)
             #endif

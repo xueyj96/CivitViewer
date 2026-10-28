@@ -108,6 +108,8 @@ struct SearchWorksView: View {
     let target: MediaSearchTarget
     @EnvironmentObject private var session: SiteSession
     @ObservedObject private var blocklist = TagBlocklist.shared
+    @ObservedObject private var authorBlocks = AuthorBlocklist.shared
+    @AppStorage("deduplicateMedia") private var deduplicateMedia = true
     @StateObject private var feed = FeedStore(diagnostics: .shared, authorBlocks: .shared)
     @State private var filter = FeedFilter(kind: .all, sort: "Newest", period: "AllTime")
     @State private var focused: Int?
@@ -141,6 +143,9 @@ struct SearchWorksView: View {
                 if !retainedKey && feed.accepts(commit, identity: session.feedIdentity) { focused = nil }
             }
             .onChange(of: blocklist.names) { _, tags in feed.applyBlockedTags(tags) }
+            .onChange(of: feed.reachedEnd) { _, _ in recordEmptyTagSearch() }
+            .onChange(of: feed.items.isEmpty) { _, _ in recordEmptyTagSearch() }
+            .onChange(of: feed.loading) { _, _ in recordEmptyTagSearch() }
             .fullScreenCover(item: $viewer) { opening in
                 FeedMediaViewer(items: feed.items, focused: $focused, initialID: opening.id,
                                 continuationState: feed.continuationState, loadMoreAutomatically: { await feed.nextAutomatically(session: session) },
@@ -149,6 +154,15 @@ struct SearchWorksView: View {
                     await feed.next(session: session)
                 }
             }
+    }
+    private func recordEmptyTagSearch() {
+        guard feed.requestKey == requestKey, !feed.loading, feed.error == nil, feed.reachedEnd, feed.items.isEmpty,
+              filter.effectiveKind == .all, filter.sort == "Newest", filter.period == "AllTime", filter.baseModel.isEmpty,
+              filter.videoDurationRange == nil, !filter.onlyPG, target.selectedTags.count == 1 else { return }
+        if case .combined(let criteria) = target, criteria.author != nil || !criteria.normalizedText.isEmpty { return }
+        let policy = TagAvailabilityPolicy(blockedTags: blocklist.names, blockedAuthorIDs: authorBlocks.blockedIDs,
+            blockedAuthorHandles: authorBlocks.blockedHandles, deduplicateMediaAssets: deduplicateMedia)
+        TagMediaAvailability.shared.recordEmptySearch(tagID: target.selectedTags[0].id, identity: session.feedIdentity, policy: policy)
     }
     private func refreshFeed() async {
         if await feed.restartCurrentFeed(session: session)?.status == .committed { focused = feed.items.first?.id }

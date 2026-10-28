@@ -252,6 +252,37 @@ import Foundation
         let payloadBytes = payloadSegments.compactMap { try? FileManager.default.attributesOfItem(atPath: $0.path)[.size] as? NSNumber }.reduce(0) { $0 + $1.intValue }
         check(payloadEntries.count <= 1_000 && payloadBytes <= 1_048_576 && payloadExport.count <= 1_100_000,
               "Representative maximum-context traffic preserves disk, event and export caps")
+        do {
+        let tagStore = LocalDiagnosticsStore(fileURL: root.appendingPathComponent("tag/diagnostics-0.jsonl"), build: 56, now: { clock.date })
+        func tagContext(stage: String = "availability", reason: String = "http", ids: [Int] = [101], visible: Int? = nil) -> TagSearchDiagnostic {
+            TagSearchDiagnostic(stage: stage, tagIDs: ids, outcome: "unknown", reason: reason, rawCount: 0, visibleCount: visible,
+                pages: 1, hasMore: false, browsingLevel: 31, kind: "all", period: "AllTime", hasAuthor: false, hasText: false,
+                blockedTags: 2, blockedAuthors: 1)
+        }
+        let tag = tagContext()
+        check(tag.isBounded && !tagContext(stage: "untrusted-text").isBounded && !tagContext(ids: [-1]).isBounded,
+              "Tag diagnostics accept only finite stages and positive bounded ID sets")
+        await tagStore.record(area: .search, code: .tagProbe, httpStatus: 403, tagSearch: tag)
+        var tagEntries = try await tagStore.entries()
+        check(tagEntries.first?.tagSearch == tag && tagEntries.first?.httpStatus == 403 && tagEntries.first?.tagSearch?.visibleCount == nil,
+              "HTTP failure preserves UNKNOWN and a nil visible count instead of inventing zero")
+        clock.date.addTimeInterval(11)
+        await tagStore.record(area: .search, code: .tagProbe, tagSearch: tagContext(stage: "untrusted-text"))
+        tagEntries = try await tagStore.entries()
+        check(tagEntries.first?.tagSearch == nil, "Invalid contexts are stripped before persistence")
+        clock.date.addTimeInterval(11)
+        await tagStore.record(area: .cache, code: .storage, tagSearch: tag)
+        tagEntries = try await tagStore.entries()
+        check(tagEntries.first?.tagSearch == nil, "Tag contexts cannot leak into unrelated event areas")
+        let tagExport = try await tagStore.exportData()
+        let tagText = String(decoding: tagExport, as: UTF8.self)
+        check(!tagText.contains("untrusted-text") && !tagText.contains("://") && !tagText.contains("username") && !tagText.contains("authorization"),
+              "Tag exports contain no arbitrary strings, addresses, account names or credentials")
+        let legacyTagRecord = try JSONSerialization.jsonObject(with: JSONEncoder().encode(entries[0])) as! [String: Any]
+        var legacyWithoutNewField = legacyTagRecord; legacyWithoutNewField.removeValue(forKey: "tagSearch")
+        let legacyDecoded = try JSONDecoder().decode(DiagnosticEntry.self, from: JSONSerialization.data(withJSONObject: legacyWithoutNewField))
+        check(legacyDecoded.tagSearch == nil, "Existing diagnostic records remain decodable without the new optional context")
+        }
         print("LocalDiagnosticsChecks: \(checks) local assertions passed; bulk sample \(boundedEntries.count) retained events / \(byteTotal) bytes")
     }
 }

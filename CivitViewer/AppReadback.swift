@@ -1,15 +1,23 @@
 import Foundation
 
 #if DEBUG
+import SwiftUI
 /// Explicit launch-only acceptance harness. Uses the app's normal session;
 /// never exports its credentials, response bodies or media URLs. No account,
 /// follow, collection or preference writes are performed. Tag probes persist
 /// public metadata; the unified probe also decodes up to three PG thumbnails
 /// into a disposable QA directory and removes it, outside user media storage.
 @MainActor enum AppReadback {
+    static var tagMediaRequested: Bool { ProcessInfo.processInfo.arguments.contains("--readback-tag-media") }
     private static var started = false
     static func runIfRequested(session: SiteSession) async {
         let args = ProcessInfo.processInfo.arguments
+        if !started, let index = args.firstIndex(of: "--readback-tag-media"), args.indices.contains(index + 1),
+           MediaSearchText.valid(args[index + 1], mode: .tag) {
+            started = true
+            await tagMediaReadback(MediaSearchText.normalized(args[index + 1]), session: session)
+            return
+        }
         if !started, args.contains("--probe-video-duration") {
             started = true
             await durationReadback(session: session)
@@ -278,6 +286,51 @@ import Foundation
         report["sameAccountContext"] = identity == session.feedIdentity; report["finished"] = true
         write(report, filename: "local-search-build\(build).json")
     }
+    private static func tagMediaReadback(_ keyword: String, session: SiteSession) async {
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "unknown"
+        let identity = session.feedIdentity
+        var report: [String: Any] = ["build": build, "readOnly": true, "metadataOnly": true, "authenticated": session.account != nil,
+                                    "browsingLevel": session.account?.browsingLevel ?? -1, "mediaDownloadOrPlayback": false]
+        let filter = FeedFilter(kind: .all, sort: "Newest", period: "AllTime")
+        let policy = TagAvailabilityPolicy(blockedTags: TagBlocklist.shared.names, blockedAuthorIDs: AuthorBlocklist.shared.blockedIDs,
+            blockedAuthorHandles: AuthorBlocklist.shared.blockedHandles, deduplicateMediaAssets: UserDefaults.standard.object(forKey: "deduplicateMedia") as? Bool ?? true)
+        report["localPolicy"] = ["blockedTags": policy.blockedTags.count, "blockedAuthors": policy.blockedAuthorIDs.count, "assetDeduplication": policy.deduplicateMediaAssets]
+        do {
+            guard let tag = try await session.exactTag(name: keyword) else {
+                report["exactTag"] = ["status": "NOT_RESOLVED"]; report["finished"] = true
+                write(report, filename: "tag-media-build\(build).json"); return
+            }
+            report["exactTag"] = ["id": tag.id, "grade": tag.nsfwLevel ?? -1]
+            struct Info: Decodable { let id: Int; let type: String }
+            do {
+                let info: Info? = try await session.rpc("tag.getById", input: ["id": tag.id])
+                report["tagClass"] = ["matchedID": info?.id == tag.id, "type": ["Label", "Moderation", "System", "UserGenerated"].contains(info?.type ?? "") ? (info?.type ?? "unknown") : "OTHER"]
+            } catch { report["tagClass"] = failure(error) }
+            do {
+                let page = try await session.tagCandidates(tagID: tag.id, author: nil, filter: filter, cursor: nil, limit: 3)
+                report["firstThree"] = ["raw": page.items.count, "matchedTag": page.items.filter { $0.tags?.contains(where: { $0.id == tag.id }) == true }.count,
+                    "validMediaAddress": page.items.filter { $0.mediaURL != nil }.count, "completeTagNames": page.items.filter { $0.tagNames != nil }.count, "hasMore": page.metadata.nextCursor != nil]
+            } catch { report["firstThree"] = failure(error) }
+            let availability = TagMediaAvailability()
+            await availability.verify(tags: [tag], source: session, policy: policy)
+            if let result = availability.result(tagID: tag.id, identity: identity, policy: policy) {
+                let state: String
+                switch result.state { case .enough: state = "enough"; case .sparse: state = "sparse"; case .unknown: state = "unknown" }
+                report["suggestionCheck"] = ["state": state, "reason": result.reason.rawValue, "visibleLowerBound": result.countLowerBound,
+                    "pages": result.pages, "raw": result.rawCount, "hasMore": result.hasMore,
+                    "httpStatus": result.httpStatus ?? 0, "recommended": result.state == .enough]
+            }
+            do {
+                let page = try await session.searchMediaPage(target: .combined(.init(tags: [tag])), filter: filter, cursor: nil, includeTags: true)
+                var accumulator = FeedAccumulator(blockedTags: policy.blockedTags, deduplicateMediaAssets: policy.deduplicateMediaAssets)
+                accumulator.applyBlockedAuthors(ids: policy.blockedAuthorIDs, handles: policy.blockedAuthorHandles); accumulator.append(page)
+                report["normalSingleTagSearch"] = ["raw": page.items.count, "visible": accumulator.items.count, "hasMore": page.metadata.nextCursor != nil,
+                    "hiddenByTag": accumulator.blockedCount, "hiddenByAuthor": accumulator.blockedAuthorCount, "unknownTagMetadata": accumulator.unverifiedCount]
+            } catch { report["normalSingleTagSearch"] = failure(error) }
+        } catch { report["exactTag"] = failure(error) }
+        report["sameAccountContext"] = identity == session.feedIdentity; report["finished"] = true
+        write(report, filename: "tag-media-build\(build).json")
+    }
     private static func probeTag(_ keyword: String, session: SiteSession) async {
         let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "unknown"
         let identity = session.feedIdentity
@@ -376,6 +429,21 @@ import Foundation
             return ["status": "FAILED", "category": category]
         }
         return ["status": "FAILED", "errorType": String(describing: type(of: error))]
+    }
+}
+
+/// Isolated metadata route: RootView, timeline, history and offline services are
+/// never constructed, so a CLI readback cannot create a media player or preload.
+struct TagMetadataReadbackView: View {
+    @EnvironmentObject private var session: SiteSession
+    @State private var finished = false
+    var body: some View {
+        VStack(spacing: 12) {
+            Text("标签接口诊断").font(.headline)
+            if finished { Text("已完成，可关闭后重新打开 App").foregroundStyle(.secondary) }
+            else { ProgressView("正在核对标签元数据…") }
+        }.frame(maxWidth: .infinity, maxHeight: .infinity)
+            .task { await session.refreshAccount(); await AppReadback.runIfRequested(session: session); finished = true }
     }
 }
 #endif

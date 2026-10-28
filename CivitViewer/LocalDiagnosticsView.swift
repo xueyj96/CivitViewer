@@ -16,7 +16,7 @@ struct LocalDiagnosticsView: View {
     var body: some View {
         List {
             Section {
-                Text("仅保存在本机。指定排查的作品可记录公开编号、系统错误码和播放来源；不包含账号、请求地址或任意错误文本。最多保留 7 天、1,000 条。")
+                Text("仅保存在本机。记录公开作品或标签编号、查询范围、处理数量及系统错误码；不包含账号、搜索文字、请求地址或任意错误文本。最多保留 7 天、1,000 条。")
                     .font(.footnote).foregroundStyle(.secondary)
                 HStack {
                     Button("准备导出") { Task { await prepareExport() } }.disabled(busy)
@@ -47,6 +47,9 @@ struct LocalDiagnosticsView: View {
                         }.font(.caption).foregroundStyle(.secondary)
                         if let playback = entry.playback {
                             Text(playback.summary).font(.caption.monospacedDigit()).textSelection(.enabled)
+                        }
+                        if let tagSearch = entry.tagSearch {
+                            Text(tagSearch.summary).font(.caption.monospacedDigit()).textSelection(.enabled)
                         }
                     }.padding(.vertical, 3)
                 }

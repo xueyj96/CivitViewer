@@ -51,6 +51,23 @@ final class FeedStore: ObservableObject {
     private var restartRetryError: String?
     private var consecutiveRestartFailures = 0
 
+    private func noteTagResult(page: MediaPage?, key: FeedStoreRequestKey, visible: Int?, error: Error? = nil) {
+        guard case .search(let target) = key.source, !target.selectedTags.isEmpty else { return }
+        let hasAuthor: Bool
+        let hasText: Bool
+        switch target {
+        case .combined(let criteria): hasAuthor = criteria.author != nil; hasText = !criteria.normalizedText.isEmpty
+        default: hasAuthor = false; hasText = false
+        }
+        let status: Int? = if case ClientError.http(let value)? = error { value } else { nil }
+        let context = TagSearchDiagnostic(stage: "visible", tagIDs: target.selectedTags.map(\.id).sorted(), outcome: error == nil ? "page" : "error",
+            reason: error == nil ? "response" : (status == nil ? "requestFailed" : "http"), rawCount: page?.items.count ?? 0,
+            visibleCount: visible, pages: 1, hasMore: page?.metadata.nextCursor != nil, browsingLevel: nil,
+            kind: key.filter.effectiveKind.rawValue, period: key.filter.period, hasAuthor: hasAuthor, hasText: hasText,
+            blockedTags: blockedTags.count, blockedAuthors: authorBlocks?.blockedIDs.count ?? 0)
+        diagnostics?.note(area: .search, code: .tagSearch, httpStatus: status, tagSearch: context)
+    }
+
     private func resetRestartRetry() {
         restartRetryAvailableAt = nil; restartRetryKey = nil; restartRetryError = nil
         consecutiveRestartFailures = 0
@@ -306,6 +323,7 @@ final class FeedStore: ObservableObject {
                 let count = accumulator.items.count
                 accumulator.append(page, kind: filter.effectiveKind)
                 items = accumulator.items; reachedEnd = accumulator.reachedEnd
+                noteTagResult(page: page, key: activeKey, visible: items.count)
                 hiddenByDuration = accumulator.hiddenByDuration; unverifiedDuration = accumulator.unverifiedDuration
                 hiddenByTags = accumulator.blockedCount; unverifiedTags = accumulator.unverifiedCount
                 hiddenByAuthors = accumulator.blockedAuthorCount
@@ -351,6 +369,7 @@ final class FeedStore: ObservableObject {
                 let area: DiagnosticArea = if case .search = source { .search } else { .playback }
                 if case ClientError.http(let status) = error { diagnostics?.note(area: area, code: .http, httpStatus: status) }
                 else { diagnostics?.note(area: area, code: .loadFailed) }
+                noteTagResult(page: nil, key: activeKey, visible: nil, error: error)
                 return FeedCommit(status: .committed, key: activeKey, revision: requestGeneration, state: .failed)
             }
             return FeedCommit(status: .superseded, key: activeKey, revision: requestGeneration, state: nil)
@@ -480,6 +499,7 @@ final class FeedStore: ObservableObject {
                 stagedProgress = page.searchProgress
                 let previousCount = staged.items.count
                 staged.append(page, kind: key.filter.effectiveKind)
+                noteTagResult(page: page, key: key, visible: staged.items.count)
                 if let cursor = staged.cursor, !stagedCursors.insert(cursor).inserted {
                     return finish(.failedRetainingPrevious, error: "加载停滞：站点重复返回分页位置，请重试从头刷新。")
                 }

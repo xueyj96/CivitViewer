@@ -145,6 +145,11 @@ import Foundation
         check(!MediaSearchCriteria(tags:Array(repeating:a,count:9)).valid && !MediaSearchCriteria(tags:[.init(id:0,name:"bad")]).valid,"Bound tag count and reject unresolved tag IDs")
         var both=item(1,post:11);both.tags=[.init(id:1,name:"city"),.init(id:2,name:"night")]
         check(try criteria.matches(both),"Text-scoped post media must satisfy selected author and every tag")
+        var witnessed = both; witnessed.tags?.append(.init(id:nil,name:"unrelated"))
+        check(try criteria.matches(witnessed),"Known required IDs remain valid when an unrelated label has no ID")
+        check(try MediaSearchCriteria(tags:[a]).matches(witnessed),"Single-tag search uses the same witnessed ID rule")
+        var incomplete = both; incomplete.tags=[.init(id:1,name:"city"),.init(id:nil,name:"unrelated")]
+        check(await rejected{_ = try criteria.matches(incomplete)},"A missing required ID with unknown labels stays unverified")
         check(try !criteria.matches(item(2,post:11)),"One matching tag is insufficient for AND conditions")
         let other=MediaItem(id:3,url:"https://example.com/fixture.mp4",width:nil,height:nil,type:"video",username:"other",browsingLevel:1,thumbnail:nil,tags:[.init(id:1,name:"city"),.init(id:2,name:"night")],postID:11)
         check(try !criteria.matches(other),"Author and tags combine with AND, not OR")

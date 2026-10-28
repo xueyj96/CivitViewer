@@ -38,7 +38,7 @@ final class ResumePromptUITests: XCTestCase {
         attachScreenshot(named: "details55-image-retry-outside-media-blur")
     }
 
-    func testTags55SparseCanBeRestoredAndUnknownRemainsVisible() {
+    func testTags56OnlyVerifiedSuggestionsWithCompleteCatalogRetained() {
         app = XCUIApplication()
         app.launchArguments = ["--qa-collection-paging", "--qa-theme-ui", "--qa-tag-availability55", "-muted", "YES"]
         app.launch()
@@ -48,19 +48,47 @@ final class ResumePromptUITests: XCTestCase {
         let sparse = app.buttons["tag-directory.tag.42002"]
         let unknown = app.buttons["tag-directory.tag.42003"]
         XCTAssertTrue(enough.waitForExistence(timeout: 8))
-        XCTAssertTrue(unknown.exists)
+        XCTAssertTrue(unknown.waitForNonExistence(timeout: 5), "Unverified failures are not recommendations")
         let hidden = sparse.waitForNonExistence(timeout: 8)
         print("TAG55_READBACK \(app.descendants(matching: .any)["qa.tag-availability55"].firstMatch.valueDescription)")
         if !hidden { print(app.debugDescription); attachScreenshot(named: "tags55-sparse-not-hidden") }
         XCTAssertTrue(hidden, "Only exhausted zero is hidden by default")
-        let toggle = app.buttons["tag-directory.sparse-toggle"]
-        XCTAssertTrue(toggle.isHittable); toggle.tap()
+        let toggle = app.segmentedControls["tag-directory.sparse-toggle"]
+        XCTAssertTrue(toggle.isHittable); toggle.buttons["全部目录"].tap()
         XCTAssertTrue(sparse.waitForExistence(timeout: 5)); XCTAssertTrue(unknown.exists)
+        XCTAssertTrue(sparse.valueDescription.contains("当前可展示 0 条"))
+        XCTAssertTrue(unknown.valueDescription.contains("暂未核实"))
         sparse.tap()
-        toggle.tap()
+        toggle.buttons["有作品"].tap()
         XCTAssertTrue(sparse.exists, "A selected sparse tag remains available after collapsing")
         XCTAssertTrue(sparse.valueDescription.contains("已选择"))
-        attachScreenshot(named: "tags55-sparse-restorable-unknown-visible-selected-kept")
+        XCTAssertFalse(unknown.exists)
+        waitUntil("Second candidate batch is checked without another manual tap") {
+            self.app.descendants(matching: .any)["qa.tag-availability55"].firstMatch.valueDescription.contains("checked=18;")
+        }
+        attachScreenshot(named: "tags56-verified-only-full-catalog-and-selected-state")
+    }
+
+    func testTags56CompletedEmptySearchWithdrawsSuggestion() {
+        app = XCUIApplication()
+        app.launchArguments = ["--qa-collection-paging", "--qa-theme-ui", "--qa-tag-availability55", "--qa-tag-empty-result56", "-muted", "YES"]
+        app.launch()
+        mainTabButton("搜索").tap(); app.buttons["search-tag-picker"].tap()
+        let tag = app.buttons["tag-directory.tag.42001"]
+        XCTAssertTrue(tag.waitForExistence(timeout: 8)); tag.tap(); app.buttons["完成"].tap()
+        app.buttons["search-submit"].tap()
+        XCTAssertTrue(app.navigationBars["搜索结果"].waitForExistence(timeout: 8))
+        let empty = app.staticTexts["当前条件下没有更多作品"]
+        let ended = empty.waitForExistence(timeout: 8)
+        if !ended { print("TAGS56_EMPTY_STATE \(app.debugDescription)"); attachScreenshot(named: "tags56-unexpected-empty-state") }
+        XCTAssertTrue(ended)
+        app.buttons["navigation.back"].tap()
+        app.buttons["移除搜索标签 portrait"].tap()
+        app.buttons["search-tag-picker"].tap()
+        XCTAssertTrue(tag.waitForNonExistence(timeout: 8), "An observed empty same-scope search withdraws cached positive evidence")
+        app.segmentedControls["tag-directory.sparse-toggle"].buttons["全部目录"].tap()
+        XCTAssertTrue(tag.waitForExistence(timeout: 5)); XCTAssertTrue(tag.valueDescription.contains("搜索未取得可展示作品"))
+        attachScreenshot(named: "tags56-empty-result-feedback-withdraws-recommendation")
     }
 
     private func assertGrid55RetryLayout() {
