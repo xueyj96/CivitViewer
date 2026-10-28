@@ -828,6 +828,57 @@ final class ResumePromptUITests: XCTestCase {
         return (0..<3).map { channel in Double(stride(from: channel, to: bytes.count, by: 4).reduce(0) { $0 + Int(bytes[$1]) }) / Double(region.width * region.height) }
     }
 
+    func testSettingsHeaderIsCompactOnEntryAndAfterTabReturn() {
+        app = XCUIApplication()
+        app.launchArguments = ["--qa-collection-paging", "--qa-style49", "-app.appearance", "dark", "-muted", "YES"]
+        XCUIDevice.shared.orientation = .portrait
+        app.launch()
+        assertCompactSettingsHeader(phase: "initial-dark")
+        mainTabButton("时间线").tap()
+        XCTAssertTrue(app.segmentedControls["timeline.media-kind"].waitForExistence(timeout: 5))
+        mainTabButton("我").tap()
+        assertCompactSettingsHeader(phase: "return-from-timeline-dark")
+        app.swipeDown()
+        assertCompactSettingsHeader(phase: "after-pull-down-dark")
+        app.terminate()
+    }
+
+    func testSettingsHeaderRemainsVisibleAfterChildAndAppearanceChanges() {
+        app = XCUIApplication()
+        app.launchArguments = ["--qa-collection-paging", "--qa-style49", "-app.appearance", "light", "-muted", "YES"]
+        XCUIDevice.shared.orientation = .portrait
+        app.launch()
+        assertCompactSettingsHeader(phase: "initial-light")
+        app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "账号内容偏好")).firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["账号内容偏好"].waitForExistence(timeout: 5))
+        let back = app.buttons["navigation.back"]
+        XCTAssertTrue(back.waitForExistence(timeout: 5)); back.tap()
+        assertCompactSettingsHeader(phase: "return-from-account-preferences")
+        // A launch-argument preference remains authoritative for that process.
+        // Relaunch without the fixed light override before changing the real picker.
+        app.terminate()
+        app.launchArguments = ["--qa-collection-paging", "--qa-style49", "-muted", "YES"]
+        app.launch()
+        chooseAppearance("浅色")
+        chooseAppearance("深色")
+        assertCompactSettingsHeader(phase: "after-appearance-change")
+        app.terminate()
+    }
+
+    private func assertCompactSettingsHeader(phase: String, file: StaticString = #filePath, line: UInt = #line) {
+        let bar = app.navigationBars["账号与设置"]
+        let title = bar.staticTexts["账号与设置"]
+        let header = app.staticTexts["Civitai 账号"]
+        XCTAssertTrue(bar.waitForExistence(timeout: 5), file: file, line: line)
+        XCTAssertTrue(header.waitForExistence(timeout: 5), file: file, line: line)
+        attachScreenshot(named: "settings54-\(phase)")
+        print("SETTINGS54_LAYOUT phase=\(phase);bar=\(bar.frame);title=\(title.frame);header=\(header.frame);titleHittable=\(title.isHittable)")
+        XCTAssertTrue(title.exists && title.isHittable, "Title must be visible before any pull-down", file: file, line: line)
+        XCTAssertLessThanOrEqual(bar.frame.height, 60, "Settings must use a compact navigation title rather than reserve a large-title region", file: file, line: line)
+        XCTAssertGreaterThanOrEqual(header.frame.minY, bar.frame.maxY - 1, "First section must be below the navigation bar", file: file, line: line)
+        XCTAssertLessThanOrEqual(header.frame.minY - bar.frame.maxY, 56, "First section must not have another empty top reservation", file: file, line: line)
+    }
+
     func testSettingsEmptyCacheUsesNumericZero() {
         visualLaunch(width: 0, large: false, landscape: false)
         mainTabButton("我").tap()

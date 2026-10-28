@@ -237,7 +237,10 @@ struct SettingsView: View {
                 Text("Google 登录由系统浏览器中的 Civitai 官网处理。授权凭据仅保存在本机 Keychain。").font(.caption).foregroundStyle(.secondary)
                 NavigationLink { MediaRepairLicenseView().appNavigationBack() } label: { SettingsRowLabel("开源组件", "curlybraces") }
             }
-        }.navigationTitle("账号与设置").ordinaryAppearance().environment(\.defaultMinListRowHeight, 52).onAppear { cache.trim() }
+        }.navigationTitle("账号与设置")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar(.visible, for: .navigationBar)
+            .ordinaryAppearance().environment(\.defaultMinListRowHeight, 52).onAppear { cache.trim() }
             .onChange(of: cacheLimitGB) { _, _ in cache.trim() }
             .onChange(of: offlineAutoSave) { _, enabled in
                 if enabled { offline.resumeAll(session: session, includeRemovedCopies: true) }
