@@ -2,6 +2,12 @@
 
 个人使用的独立 iPhone 客户端，连接 `https://civitai.red`。最低 iOS 17；界面和播放使用 SwiftUI、UIKit、AVFoundation、SafariServices；兼容修复包含固定版本的 FFmpeg 及 CivitMediaEngine，不运行外部辅助服务。依赖源码、许可证和构建脚本随工程保存，见 `Vendor/FFmpeg/README.md`。
 
+## 下载 IPA
+
+[GitHub Release 下载](https://github.com/xueyj96/CivitViewer/releases/tag/v0.3.0-build54)提供 Release 配置的 iPhone IPA。包内不含个人设备描述文件，接收方需要用自己的 Apple 账号通过侧载工具重签安装；下载链接不能直接完成 iOS 安装。安装步骤与可复现构建命令见 [侧载说明](docs/SIDELOADING.md)。
+
+## 当前版本
+
 当前手机独立读回版本为 **0.3.0（54）**：2026-10-28（新加坡）确认。54只调整「账号与设置」页的导航所有权：使用紧凑居中标题并明确显示导航栏，不增加顶部padding或safe-area偏移。模拟器导航栏从106pt降为54pt，首个分区上移52pt；首次进入、时间线切回、子页返回和外观切换的标题／几何检查通过。独立读回手机版本54，五类目录共660个普通文件的路径／大小／mtime一致；手机首次标题显示仍待正常使用复测。摘要见 `docs/verification/build-54-summary.json`。
 
 53修复恢复单条时间线后的持续补货、长视频预载容量与共享预算，以及单击底栏回顶后媒体预载停止的问题。默认准备后续6条作品，可选3／6／10条；视频预载单条硬上限512MiB，实际预算受缓存余量、1GB磁盘保留空间及正在进行的下载共同约束。设置显示已准备数量与网络／空间等有限失败原因。
