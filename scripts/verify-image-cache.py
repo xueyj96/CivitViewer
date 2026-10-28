@@ -20,18 +20,31 @@ subprocess.run(['xcrun','swiftc',str(root/'CivitViewer/VideoDuration.swift'),str
 def chunk(t, data):
     return struct.pack('!I',len(data))+t+data+struct.pack('!I',zlib.crc32(t+data)&0xffffffff)
 png = b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('!2I5B',16,16,8,2,0,0,0))+chunk(b'IDAT',zlib.compress((b'\0'+bytes((30,120,210))*16)*16))+chunk(b'IEND',b'')
-lock=threading.Lock(); requests={}; active=0; maximum=0
+large_png = b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('!2I5B',16,16,8,2,0,0,0))+chunk(b'tEXt',b'fixture\0'+b'x'*(20*1024*1024))+chunk(b'IDAT',zlib.compress((b'\0'+bytes((30,120,210))*16)*16))+chunk(b'IEND',b'')
+lock=threading.Lock(); requests={}; active_by_path={}; active=0; maximum=0; same_url_max=0
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self,*args): pass
     def do_GET(self):
-        global active,maximum
+        global active,maximum,same_url_max
         if self.path=='/stats':
-            with lock: data=json.dumps({'requests':requests,'maxActive':maximum}).encode()
+            with lock: data=json.dumps({'requests':requests,'maxActive':maximum,'sameURLMax':same_url_max}).encode()
             self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data);return
         with lock:
             requests[self.path]=requests.get(self.path,0)+1; nth=requests[self.path];active+=1;maximum=max(maximum,active)
+            active_by_path[self.path]=active_by_path.get(self.path,0)+1
+            if self.path == '/shared-quota-image': same_url_max=max(same_url_max,active_by_path[self.path])
         try:
-            time.sleep(0.7 if self.path.startswith('/block-') else 0.25)
+            time.sleep(0.7 if self.path.startswith('/block-') or (self.path == '/shared-quota-image' and nth == 1) else 0.25)
+            if self.path == '/oversized-image':
+                # Stream a synthetic body beyond the image ceiling without a large allocation.
+                size = 65 * 1024 * 1024
+                self.send_response(200);self.send_header('Content-Type','image/png');self.send_header('Content-Length',str(size));self.end_headers()
+                block=large_png;remaining=size
+                while remaining:
+                    data=block[:min(remaining,len(block))];self.wfile.write(data);remaining-=len(data)
+                return
+            if self.path in ('/large-image','/quota-image','/shared-quota-image'):
+                self.send_response(200);self.send_header('Content-Type','image/png');self.send_header('Content-Length',str(len(large_png)));self.end_headers();self.wfile.write(large_png);return
             if self.path == '/large-video':
                 # A small-prefetch flight must finish before the larger repair
                 # request retries. Stream a representative 65MiB body, not RAM.
@@ -53,7 +66,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);self.wfile.flush()
         except (BrokenPipeError,ConnectionResetError):pass
         finally:
-            with lock:active-=1
+            with lock:
+                active-=1;active_by_path[self.path]-=1
 server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);server.daemon_threads=True
 threading.Thread(target=server.serve_forever,daemon=True).start()
 try:subprocess.run([str(binary),f'http://127.0.0.1:{server.server_port}',*sys.argv[1:]],check=True,env=env,timeout=60)

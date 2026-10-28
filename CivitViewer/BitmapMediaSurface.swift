@@ -36,10 +36,8 @@ struct BitmapMediaSurface: View {
                 }
             } else if failure == nil { ProgressView().tint(.white) }
             if let failure {
-                VStack(spacing: 10) {
-                    Text(failure).font(.caption).multilineTextAlignment(.center)
-                    Button("重试") { retry += 1 }
-                }.padding(14).foregroundStyle(.white).background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 12))
+                MediaLoadFailureContent(message: failure, retry: { retry += 1 })
+                    .foregroundStyle(.white).background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 12))
             }
         }
         .task(id: Key(url: url, retry: retry)) {
@@ -144,6 +142,7 @@ struct CachedPoster: View {
     var allowLocalExtraction = false
     var diagnosticWorkID: Int? = nil
     var onFailure: ((Bool) -> Void)? = nil
+    var showsFailure = true
     @State private var image: UIImage?
     @State private var failed = false
     @State private var cacheRevision = 0
@@ -155,8 +154,10 @@ struct CachedPoster: View {
                     Image(uiImage: image).resizable().aspectRatio(contentMode: fit ? .fit : .fill)
                         .frame(width: geometry.size.width, height: geometry.size.height).clipped()
                 } else if failed {
-                    Image(systemName: "play.rectangle").font(.title).foregroundStyle(.secondary)
-                        .accessibilityLabel("视频封面暂不可用，打开作品播放")
+                    if showsFailure {
+                        Image(systemName: "play.rectangle").font(.title).foregroundStyle(.secondary)
+                            .accessibilityLabel("视频封面暂不可用，打开作品播放")
+                    }
                 } else { ProgressView() }
             }.frame(width: geometry.size.width, height: geometry.size.height).clipped()
         }

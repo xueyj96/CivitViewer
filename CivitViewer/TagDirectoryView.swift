@@ -6,6 +6,8 @@ struct TagDirectoryView: View {
     @EnvironmentObject private var session: SiteSession
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var blocklist = TagBlocklist.shared
+    @ObservedObject private var availability = TagMediaAvailability.shared
+    @AppStorage("tagDirectory.showSparse") private var showSparse = false
     @State private var mode: TagDirectoryMode
     @State private var query: String
     @State private var selectionError: String?
@@ -19,6 +21,16 @@ struct TagDirectoryView: View {
     private var activeMode: TagDirectoryMode { keyword.isEmpty ? mode : .catalog }
     private var key: TagDirectoryStore.Key { .init(mode: activeMode, keyword: keyword, identity: session.tagLookupIdentity) }
     private var valid: Bool { keyword.isEmpty || MediaSearchText.valid(keyword, mode: .tag) }
+    private struct AvailabilityKey: Hashable { let identity: String; let ids: [Int] }
+    private var availabilityKey: AvailabilityKey {
+        .init(identity: session.feedIdentity, ids: store.key == key ? store.tags.map(\.id) : [])
+    }
+    private var displayedTags: [SearchTag] {
+        store.tags.filter { tag in showSparse || selected.contains(where: { $0.id == tag.id }) || !availability.isSparse(tagID: tag.id, identity: session.feedIdentity) }
+    }
+    private var sparseCount: Int {
+        store.tags.filter { availability.isSparse(tagID: $0.id, identity: session.feedIdentity) }.count
+    }
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
@@ -58,6 +70,14 @@ struct TagDirectoryView: View {
                             }
                         }
                     }
+                    HStack(spacing: 10) {
+                        Text("标签范围").font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Button(showSparse ? "全部标签" : "收起少量作品") { showSparse.toggle() }
+                            .font(.caption).buttonStyle(AppActionButtonStyle())
+                            .accessibilityLabel(showSparse ? "收起作品较少的标签" : "显示全部标签，包括少量作品标签")
+                            .accessibilityIdentifier("tag-directory.sparse-toggle")
+                    }
                 }.padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 12)
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 14) {
@@ -69,11 +89,16 @@ struct TagDirectoryView: View {
                         if let selectionError { Text(selectionError).font(.caption).foregroundStyle(.secondary) }
                     if store.key == key {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 132), spacing: 8)], alignment: .leading, spacing: 8) {
-                            ForEach(store.tags) { tag in
+                            ForEach(displayedTags) { tag in
                                 let chosen = selected.contains(where: { $0.id == tag.id })
                             Button { toggle(tag) } label: {
                                 HStack(spacing: 7) {
-                                    Text(tag.name).font(.subheadline).lineLimit(2)
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(tag.name).font(.subheadline).lineLimit(2)
+                                        if showSparse, let result = availability.result(tagID: tag.id, identity: session.feedIdentity), result.state == .sparse {
+                                            Text("\(result.countLowerBound) 条可见作品").font(.caption2).foregroundStyle(.secondary)
+                                        }
+                                    }
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                     if blocklist.names.contains(TagPolicy.normalize(tag.name)) { Image(systemName: "tag.slash").font(.caption2).foregroundStyle(.secondary) }
                                     Image(systemName: chosen ? "checkmark.circle.fill" : "plus").font(.caption)
@@ -91,6 +116,8 @@ struct TagDirectoryView: View {
                         }
                         if store.loading {
                             HStack(spacing: 10) { ProgressView(); Text(store.tags.isEmpty ? "正在查找标签…" : "正在补充更多标签…").font(.caption).foregroundStyle(.secondary) }
+                        } else if displayedTags.isEmpty && sparseCount > 0 {
+                            Text("匹配标签的可见作品较少，点“显示全部”仍可选择。").font(.caption).foregroundStyle(.secondary)
                         } else if store.tags.isEmpty && store.reachedEnd {
                             Text("没有找到匹配标签，可尝试其他名称或首字母。").foregroundStyle(.secondary)
                         } else if store.tags.isEmpty && store.error == nil && store.onlineError == nil {
@@ -112,9 +139,14 @@ struct TagDirectoryView: View {
                         if !store.loading && !store.reachedEnd { Button("继续加载标签") { perform { await store.next(source: session) } }.buttonStyle(AppActionButtonStyle()) }
                     } else if valid { ProgressView("正在查找标签…") }
                     else { Text(MediaSearchText.validationMessage).font(.caption).foregroundStyle(.secondary) }
-                        Text("当前已加载 \(store.key == key ? store.tags.count : 0) 个").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                        Text("当前显示 \(store.key == key ? displayedTags.count : 0) 个" + (!showSparse && sparseCount > 0 ? " · 已收起 \(sparseCount) 个少量作品标签" : "")).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                        if store.key == key, !store.tags.isEmpty {
+                            Button("核对更多候选的作品量") {
+                                perform { await availability.verify(tags: store.tags, source: session) }
+                            }.font(.caption).buttonStyle(AppActionButtonStyle())
+                        }
                         DisclosureGroup("目录范围", isExpanded: $showDirectoryScope) {
-                            Text("多选时作品须包含全部所选标签。目录来自本机收录及站点返回，不代表全站总量；已隐藏纯符号、纯数字及年代类杂项。")
+                            Text("多选时作品须包含全部所选标签。完整标签库保留；按当前账号、全部媒体与全部时间核对后，少于 3 条可见作品的标签默认收起。尚未核对或请求失败的标签继续显示。每批仅核对有限候选，不代表全站总量。已隐藏纯符号、纯数字及年代类杂项。")
                                 .font(.caption).foregroundStyle(.secondary).padding(.top, 6)
                         }.font(.caption).foregroundStyle(.secondary)
                     }.padding(16)
@@ -128,9 +160,23 @@ struct TagDirectoryView: View {
                     guard valid else { store.cancel(); return }
                     await store.reload(key: key, source: session)
                 }
+                .task(id: availabilityKey) {
+                    guard store.key == key, valid else { return }
+                    await availability.verify(tags: store.tags, source: session)
+                }
                 .refreshable { if valid { await store.reload(key: key, source: session, forceRemote: true) } }
                 .onChange(of: key) { _, _ in actionTask?.cancel(); actionTask = nil }
                 .onDisappear { actionTask?.cancel(); actionTask = nil; store.cancel() }
+                #if DEBUG && targetEnvironment(simulator)
+                .overlay(alignment: .topLeading) {
+                    if ProcessInfo.processInfo.arguments.contains("--qa-tag-availability55") {
+                        let zero = availability.result(tagID: 42_002, identity: session.feedIdentity)
+                        let value = "identity=\(session.feedIdentity);showSparse=\(showSparse);selected=\(selected.map(\.id));loaded=\(store.tags.count);visible=\(displayedTags.count);checked=\(availability.checkedCount(identity: session.feedIdentity));zero=\(String(describing: zero?.state));revision=\(availability.revision)"
+                        Text(value).font(.system(size: 1)).frame(width: 1, height: 1).opacity(0.01).allowsHitTesting(false)
+                            .accessibilityIdentifier("qa.tag-availability55").accessibilityValue(value)
+                    }
+                }
+                #endif
         }
     }
     private func toggle(_ tag: SearchTag) {

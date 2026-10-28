@@ -70,7 +70,11 @@ final class SiteSession: NSObject, ObservableObject, WKNavigationDelegate, WKUID
     #if DEBUG && targetEnvironment(simulator)
     func configureForCollectionPagingQA() {
         guard CollectionPagingQA.enabled else { return }
-        account = Account(id: CollectionPagingQA.ownerID, username: "PagingFixture", browsingLevel: 1, blurNsfw: false)
+        if ProcessInfo.processInfo.arguments.contains("--qa-tag-availability55") {
+            UserDefaults.standard.set(false, forKey: "tagDirectory.showSparse")
+        }
+        account = Account(id: CollectionPagingQA.ownerID, username: "PagingFixture", browsingLevel: 1,
+                          blurNsfw: ProcessInfo.processInfo.arguments.contains("--qa-image-failure55"))
         collections = [CollectionPagingQA.collection]; collectionsKnown = true
         if VisualControlsQA.enabled {
             following = []; followsKnown = true; savedMemberships = [:]
@@ -416,7 +420,7 @@ final class SiteSession: NSObject, ObservableObject, WKNavigationDelegate, WKUID
     }
     func directoryPage(mode: TagDirectoryMode, keyword: String, cursor: TagDirectoryCursor?) async throws -> TagDirectoryPage {
         #if DEBUG && targetEnvironment(simulator)
-        if CollectionPagingQA.enabled && ProcessInfo.processInfo.arguments.contains("--qa-style48") {
+        if CollectionPagingQA.enabled && (ProcessInfo.processInfo.arguments.contains("--qa-style48") || ProcessInfo.processInfo.arguments.contains("--qa-tag-availability55")) {
             let normalized = TagPolicy.normalize(keyword)
             let tags = CollectionPagingQA.neutralDetailsTags.compactMap { value -> SearchTag? in
                 guard let id = value.id, let name = value.name,
@@ -431,7 +435,7 @@ final class SiteSession: NSObject, ObservableObject, WKNavigationDelegate, WKUID
     }
     func onlineTagPage(mode: TagDirectoryMode, keyword: String, page: Int) async throws -> [SearchTag]? {
         #if DEBUG && targetEnvironment(simulator)
-        if CollectionPagingQA.enabled && ProcessInfo.processInfo.arguments.contains("--qa-style48") {
+        if CollectionPagingQA.enabled && (ProcessInfo.processInfo.arguments.contains("--qa-style48") || ProcessInfo.processInfo.arguments.contains("--qa-tag-availability55")) {
             if mode == .common && keyword.isEmpty {
                 return CollectionPagingQA.neutralDetailsTags.compactMap { value in
                     guard let id = value.id, let name = value.name else { return nil }
@@ -526,6 +530,17 @@ final class SiteSession: NSObject, ObservableObject, WKNavigationDelegate, WKUID
 
     func tagCandidates(tagID: Int, author: Creator?, filter: FeedFilter, cursor: String?, limit: Int) async throws -> MediaPage {
         guard tagID > 0, (1...100).contains(limit) else { throw ClientError.invalidResponse }
+        #if DEBUG && targetEnvironment(simulator)
+        if CollectionPagingQA.enabled && ProcessInfo.processInfo.arguments.contains("--qa-tag-availability55") {
+            if tagID == 42_002 { return .init(items: [], metadata: .init(nextCursor: nil)) }
+            if tagID == 42_003 { throw URLError(.timedOut) }
+            let items = (0..<3).map { offset in
+                MediaItem(id: 55_100 + offset, url: "", width: 1, height: 1, type: offset == 0 ? "video" : "image",
+                          username: "LocalFixture", browsingLevel: 1, thumbnail: nil, tags: [.init(id: tagID, name: "fixture")])
+            }
+            return .init(items: items, metadata: .init(nextCursor: nil))
+        }
+        #endif
         return try await scopedSearchMedia(filter: filter, cursor: cursor, extra: [.init(name: "tags", value: String(tagID))], includeTags: true, creator: author, limit: limit)
     }
 

@@ -21,6 +21,7 @@ struct MediaDetailsView: View {
     @State private var authorBlockRequestID: UUID?
     @State private var displayedItemID: Int
     @State private var posterFailed = false
+    @State private var imageFailure: String?
     @State private var posterRetry = 0
     private var blurPreview: Bool { (session.account?.blurNsfw ?? true) && ((item.browsingLevel ?? 1) & 28 != 0) }
     init(item: MediaItem) {
@@ -171,9 +172,10 @@ struct MediaDetailsView: View {
             if item.isVideo, let source = item.mediaURL {
                 CachedPoster(source: source, declared: item.posterURL, active: false, fit: true,
                     retryToken: posterRetry, allowLocalExtraction: true, diagnosticWorkID: item.id,
-                    onFailure: { posterFailed = $0 })
+                    onFailure: { posterFailed = $0 }, showsFailure: false)
             } else if !item.isVideo, let imageURL = item.mediaURL {
-                CachedImage(url: imageURL, fit: true, allowsRetry: false)
+                CachedImage(url: imageURL, fit: true, allowsRetry: false, retryToken: posterRetry,
+                            showsFailure: false, onFailureMessage: { imageFailure = $0 })
             } else {
                 Image(systemName: item.isVideo ? "play.rectangle" : "photo")
                     .font(.system(size: 30, weight: .regular))
@@ -181,12 +183,12 @@ struct MediaDetailsView: View {
             }
             }.blur(radius: blurPreview ? 24 : 0)
             if posterFailed {
-                VStack {
-                    Spacer()
-                    Button("重试封面") { posterRetry += 1 }
-                        .buttonStyle(AppActionButtonStyle())
-                        .accessibilityIdentifier("details.poster.retry")
-                }.padding(8)
+                MediaLoadFailureContent(message: "封面暂时无法加载", symbol: "play.rectangle",
+                                        retryLabel: "重试封面", retryIdentifier: "details.poster.retry",
+                                        retry: { posterRetry += 1 })
+            } else if let imageFailure {
+                MediaLoadFailureContent(message: imageFailure, retryIdentifier: "details.image.retry",
+                                        retry: { posterRetry += 1 })
             }
         }
         .frame(maxWidth: .infinity)

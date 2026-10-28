@@ -401,6 +401,12 @@ struct CollectionPagingQAView: View {
         CollectionPagingQA.biographyCase
     }
     private var posterDetailsItem50: MediaItem {
+        if ProcessInfo.processInfo.arguments.contains("--qa-image-failure55") {
+            var value = MediaItem(id: 55_003, url: "", width: 192, height: 256, type: "image",
+                                  username: "LocalFixture", browsingLevel: 8, thumbnail: nil, tags: [])
+            value.offlineMediaURL = CollectionPagingQA.root.appendingPathComponent("missing-image55.png")
+            return value
+        }
         var item = CollectionPagingQA.items[0]
         if ProcessInfo.processInfo.arguments.contains("--qa-poster-missing50") { item.offlineMediaURL = nil }
         return item

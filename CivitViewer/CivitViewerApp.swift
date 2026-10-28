@@ -13,7 +13,8 @@ struct CivitViewerApp: App {
         WindowGroup {
             Group {
             #if DEBUG && targetEnvironment(simulator)
-            if ProcessInfo.processInfo.arguments.contains("--qa-preparation48") { VideoPreparationOverlayQAView() }
+            if ProcessInfo.processInfo.arguments.contains("--qa-grid-retry55") { GridRetryQAView() }
+            else if ProcessInfo.processInfo.arguments.contains("--qa-preparation48") { VideoPreparationOverlayQAView() }
             else if CollectionPagingQA.enabled { CollectionPagingQAView().environmentObject(session).environmentObject(session.oauth) }
             else if ResumePromptQA.enabled { ResumePromptQAView().environmentObject(session).environmentObject(session.oauth) }
             else if MediaFormatQA.enabled { MediaFormatQAView().environmentObject(session).environmentObject(session.oauth) }

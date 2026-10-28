@@ -8,6 +8,78 @@ final class ResumePromptUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    func testGrid55RetryStaysWithErrorAndDoesNotOpenWork() {
+        app = XCUIApplication()
+        app.launchArguments = ["--qa-grid-retry55", "-muted", "YES"]
+        app.launch()
+        assertGrid55RetryLayout()
+        attachScreenshot(named: "grid55-centered-image-and-poster-retry")
+    }
+
+    func testGrid55RetryRemainsVisibleAtLargeType() {
+        app = XCUIApplication()
+        app.launchArguments = ["--qa-grid-retry55", "--qa-grid-retry-large55", "-muted", "YES"]
+        app.launch()
+        assertGrid55RetryLayout()
+        attachScreenshot(named: "grid55-centered-retry-large-type")
+    }
+
+    func testDetails55ImageFailureRetryStaysOutsideBlur() {
+        app = XCUIApplication()
+        app.launchArguments = ["--qa-collection-paging", "--qa-poster-details50", "--qa-image-failure55", "-muted", "YES"]
+        app.launch()
+        let retry = app.buttons["details.image.retry"]
+        XCTAssertTrue(retry.waitForExistence(timeout: 10)); XCTAssertTrue(retry.isHittable)
+        let frame = retry.frame
+        XCTAssertGreaterThan(frame.width, 70); XCTAssertGreaterThan(frame.height, 43)
+        retry.tap()
+        XCTAssertTrue(retry.waitForExistence(timeout: 8))
+        XCTAssertLessThan(abs(retry.frame.midX - frame.midX), 1)
+        attachScreenshot(named: "details55-image-retry-outside-media-blur")
+    }
+
+    func testTags55SparseCanBeRestoredAndUnknownRemainsVisible() {
+        app = XCUIApplication()
+        app.launchArguments = ["--qa-collection-paging", "--qa-theme-ui", "--qa-tag-availability55", "-muted", "YES"]
+        app.launch()
+        mainTabButton("搜索").tap()
+        app.buttons["search-tag-picker"].tap()
+        let enough = app.buttons["tag-directory.tag.42001"]
+        let sparse = app.buttons["tag-directory.tag.42002"]
+        let unknown = app.buttons["tag-directory.tag.42003"]
+        XCTAssertTrue(enough.waitForExistence(timeout: 8))
+        XCTAssertTrue(unknown.exists)
+        let hidden = sparse.waitForNonExistence(timeout: 8)
+        print("TAG55_READBACK \(app.descendants(matching: .any)["qa.tag-availability55"].firstMatch.valueDescription)")
+        if !hidden { print(app.debugDescription); attachScreenshot(named: "tags55-sparse-not-hidden") }
+        XCTAssertTrue(hidden, "Only exhausted zero is hidden by default")
+        let toggle = app.buttons["tag-directory.sparse-toggle"]
+        XCTAssertTrue(toggle.isHittable); toggle.tap()
+        XCTAssertTrue(sparse.waitForExistence(timeout: 5)); XCTAssertTrue(unknown.exists)
+        sparse.tap()
+        toggle.tap()
+        XCTAssertTrue(sparse.exists, "A selected sparse tag remains available after collapsing")
+        XCTAssertTrue(sparse.valueDescription.contains("已选择"))
+        attachScreenshot(named: "tags55-sparse-restorable-unknown-visible-selected-kept")
+    }
+
+    private func assertGrid55RetryLayout() {
+        for id in [55_001, 55_002] {
+            let button = app.buttons["media.grid.retry.\(id)"]
+            let appeared = button.waitForExistence(timeout: 8)
+            if !appeared { print("GRID55_MISSING_RETRY \(app.debugDescription)"); attachScreenshot(named: "grid55-missing-retry-\(id)") }
+            XCTAssertTrue(appeared); XCTAssertTrue(button.isHittable)
+            let cell = app.buttons["media.grid.cell.\(id)"]
+            XCTAssertTrue(cell.exists)
+            XCTAssertLessThan(abs(button.frame.midX - cell.frame.midX), 2)
+            XCTAssertGreaterThan(button.frame.height, 43)
+            XCTAssertLessThan(button.frame.maxY, cell.frame.maxY - 20, "Retry belongs beside the error, above the card bottom")
+            button.tap()
+            XCTAssertTrue(button.waitForExistence(timeout: 8))
+            XCTAssertEqual(app.staticTexts["grid.retry.qa.opens"].label, "opened=0", "Retry must not activate the sibling open button")
+        }
+    }
+
     private func launchQA(_ scenario: String) {
         app = XCUIApplication()
         let runID = UUID().uuidString

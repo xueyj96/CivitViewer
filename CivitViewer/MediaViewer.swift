@@ -683,6 +683,28 @@ struct MediaPageView: View {
     }
 }
 
+/// Shared compact failure content. Grid retries are siblings of the open button,
+/// so a retry cannot accidentally navigate into the failed work.
+struct MediaLoadFailureContent: View {
+    let message: String
+    var symbol = "photo"
+    var retryLabel = "重试图片"
+    var retryIdentifier = ""
+    var retry: (() -> Void)? = nil
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: symbol).font(.title3).foregroundStyle(.secondary)
+            Text(message).font(.caption).multilineTextAlignment(.center).lineLimit(3)
+                .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if let retry {
+                Button(action: retry) { Label(retryLabel, systemImage: "arrow.clockwise").font(.caption) }
+                    .buttonStyle(AppActionButtonStyle()).fixedSize(horizontal: true, vertical: false)
+                    .accessibilityIdentifier(retryIdentifier)
+            }
+        }.padding(12).frame(maxWidth: 260)
+    }
+}
+
 struct CachedImage: View {
     let url: URL
     var fit = false
@@ -690,6 +712,8 @@ struct CachedImage: View {
     var allowsRetry = true
     var retryToken = 0
     var onFailure: ((Bool) -> Void)? = nil
+    var showsFailure = true
+    var onFailureMessage: ((String?) -> Void)? = nil
     @State private var image: UIImage?
     @State private var failure: String?
     @State private var retry = 0
@@ -702,20 +726,15 @@ struct CachedImage: View {
                     Image(uiImage: image).resizable().aspectRatio(contentMode: fit ? .fit : .fill)
                         .frame(width: geometry.size.width, height: geometry.size.height).clipped()
                 } else if let failure {
-                    VStack(spacing: 8) {
-                        Image(systemName: "photo").font(.title3)
-                        Text(failure).font(.caption2).multilineTextAlignment(.center)
-                        if allowsRetry {
-                            Button { retry += 1 } label: { Label("重试", systemImage: "arrow.clockwise").font(.caption) }
-                                .buttonStyle(.bordered).accessibilityLabel("重试加载图片")
-                        }
-                    }.foregroundStyle(.secondary).padding(12)
+                    if showsFailure {
+                        MediaLoadFailureContent(message: failure, retry: allowsRetry ? { retry += 1 } : nil)
+                    }
                 } else { ProgressView() }
             }.frame(width: geometry.size.width, height: geometry.size.height).clipped()
         }
         .task(id: RequestKey(url: url, retry: retry, externalRetry: retryToken)) {
             guard !Task.isCancelled else { return }
-            onReady?(false); onFailure?(false); image = nil; failure = nil
+            onReady?(false); onFailure?(false); onFailureMessage?(nil); image = nil; failure = nil
             do {
                 let value = try await MediaCache.shared.loadImage(url)
                 guard !Task.isCancelled else { return }
@@ -733,6 +752,7 @@ struct CachedImage: View {
                     else { LocalDiagnosticsStore.shared.note(area: .thumbnail, code: .invalidResponse) }
                 } else { failure = "图片暂时无法加载"; LocalDiagnosticsStore.shared.note(area: .thumbnail, code: .network) }
                 onFailure?(true)
+                onFailureMessage?(failure)
             }
         }
         .onDisappear { image = nil; onReady?(false) }

@@ -65,6 +65,7 @@ enum PosterDiagnosticPolicy {
 @MainActor
 final class MediaCache: ObservableObject {
     static let shared = MediaCache()
+    static let imageDownloadMaximum: Int64 = 64 * 1024 * 1024
     @Published private(set) var diskBytes: Int64 = 0
     @Published private(set) var diskUsageKnown = false
     @Published private(set) var cacheHits = 0
@@ -386,10 +387,10 @@ final class MediaCache: ObservableObject {
         catch MediaDownloadError.http(let status) { diagnostics?.note(area: .cache, code: .http, httpStatus: status); return nil }
         catch { diagnostics?.note(area: .cache, code: .loadFailed); return nil }
     }
-    /// Long-video preloading has its own bounded budget. Ordinary fetch keeps
-    /// its64MiB contract; an admitted preload can use up to512MiB when it fits.
+    /// Images share one bounded 64 MiB limit. Long-video preloading has its own
+    /// bounded budget; an admitted preload can use up to 512 MiB when it fits.
     func preloadFile(_ url: URL, video: Bool) async throws -> URL {
-        try await fetchFile(url, video: video, videoMaximum: video ? 512 * 1024 * 1024 : 64 * 1024 * 1024, prefetching: true)
+        try await fetchFile(url, video: video, videoMaximum: video ? 512 * 1024 * 1024 : Self.imageDownloadMaximum, prefetching: true)
     }
     func recordPreloadFailure(_ error: Error) -> DiagnosticCode {
         let code: DiagnosticCode
@@ -451,20 +452,20 @@ final class MediaCache: ObservableObject {
         } else {
             let id = UUID(), target = directory.appendingPathComponent(downloadKey)
             flightID = id
-            inheritedMaximum = video ? videoMaximum : 16 * 1024 * 1024
+            inheritedMaximum = video ? videoMaximum : Self.imageDownloadMaximum
             task = Task<URL, Error> {
                 try await downloads.acquire(id)
                 defer { downloads.release(id) }
                 try Task.checkCancellation()
                 // Reserve once per admitted flight, not once per consumer or
                 // queued thumbnail. Concurrent preloads share the same budget.
-                let requestedMaximum = video ? videoMaximum : 16 * 1024 * 1024
+                let requestedMaximum = video ? videoMaximum : Self.imageDownloadMaximum
                 let effectiveMaximum: Int64
                 if prefetching {
                     do { effectiveMaximum = try preloadMaximum(video: video, requested: requestedMaximum) }
                     catch ImageLoadError.lowSpace { throw PreloadQuotaFailure(maximum: 0) }
                 } else { effectiveMaximum = requestedMaximum }
-                let reservation: Int64 = prefetching ? effectiveMaximum : (video ? min(videoMaximum, 64 * 1024 * 1024) : 16 * 1024 * 1024)
+                let reservation: Int64 = prefetching ? effectiveMaximum : (video ? min(videoMaximum, 64 * 1024 * 1024) : Self.imageDownloadMaximum)
                 let minimumFree = reserve + repairReserved + downloadReserved + reservation
                 if let available = availableBytes, available < minimumFree {
                     trim()
@@ -530,7 +531,7 @@ final class MediaCache: ObservableObject {
             try Task.checkCancellation()
             guard requestGeneration == generation else { throw CancellationError() }
             guard !prefetching else { throw ImageLoadError.lowSpace }
-            let ownMaximum: Int64 = video ? videoMaximum : 16 * 1024 * 1024
+            let ownMaximum: Int64 = video ? videoMaximum : Self.imageDownloadMaximum
             guard ownMaximum > quota.maximum else { throw MediaDownloadError.limitExceeded }
             guard allowQuotaUpgrade else { throw ImageLoadError.lowSpace }
             // The quota-limited writer has ended. A foreground consumer may
@@ -566,7 +567,7 @@ final class MediaCache: ObservableObject {
         trim()
     }
     func hasPrefetchSpace(video: Bool = true) -> Bool {
-        (try? preloadMaximum(video: video, requested: video ? 512 * 1024 * 1024 : 16 * 1024 * 1024)) != nil
+        (try? preloadMaximum(video: video, requested: video ? 512 * 1024 * 1024 : Self.imageDownloadMaximum)) != nil
     }
 
     func clear() {

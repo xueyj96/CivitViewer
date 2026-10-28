@@ -62,6 +62,62 @@ import Combine
         check(!FileManager.default.fileExists(atPath: target(badURL).path), "Invalid image body is not stored")
         _ = try await cache.loadImage(badURL)
         check(FileManager.default.fileExists(atPath: target(badURL).path), "A later valid response repairs the same request")
+        let largeImage = address("large-image")
+        let largeDecoded = try await cache.loadImage(largeImage)
+        check(largeDecoded.size.width > 0, "A valid synthetic image larger than 16 MiB decodes")
+        check(FileManager.default.fileExists(atPath: target(largeImage).path), "A valid synthetic image larger than 16 MiB is cached")
+        let oversizedImage = address("oversized-image")
+        do { _ = try await cache.loadImage(oversizedImage); preconditionFailure("Image larger than 64 MiB was accepted") }
+        catch MediaDownloadError.limitExceeded { checks += 1 }
+        check(!FileManager.default.fileExists(atPath: target(oversizedImage).path), "An image larger than 64 MiB is canceled and never cached")
+        let limitedCacheFolder = root.appendingPathComponent("limited-cache", isDirectory: true)
+        let freeBytes = Int64(1_000_000_000 + 8 * 1024 * 1024)
+        let limitedCache = MediaCache(directoryURL: limitedCacheFolder, monitorNetwork: false, diagnostics: nil,
+            availableBytesProvider: { freeBytes })
+        let quotaImage = address("quota-image")
+        do { _ = try await limitedCache.preloadFile(quotaImage, video: false); preconditionFailure("Insufficient image preload quota was accepted") }
+        catch ImageLoadError.lowSpace { checks += 1 }
+        let quotaTarget = limitedCacheFolder.appendingPathComponent(SHA256.hash(data: Data(quotaImage.absoluteString.utf8)).map { String(format: "%02x", $0) }.joined() + ".img")
+        check(!FileManager.default.fileExists(atPath: quotaTarget.path), "A quota-limited preload leaves no partial image in cache")
+        check(limitedCache.pendingDownloadBudget == 0 && limitedCache.diskBytes == 0 && freeBytes == 1_000_000_000 + 8 * 1024 * 1024,
+            "A rejected dynamic preload quota releases reservations and leaves cache and available-space accounting unchanged")
+        var sharedFreeBytes = Int64(1_000_000_000 + 8 * 1024 * 1024)
+        let sharedCacheFolder = root.appendingPathComponent("shared-quota-cache", isDirectory: true)
+        let sharedCache = MediaCache(directoryURL: sharedCacheFolder, monitorNetwork: false, diagnostics: nil,
+            availableBytesProvider: { sharedFreeBytes })
+        let sharedQuotaImage = address("shared-quota-image")
+        let sharedPreload = Task { () -> String in
+            do { _ = try await sharedCache.preloadFile(sharedQuotaImage, video: false); return "SUCCESS" }
+            catch ImageLoadError.lowSpace { return "LOW_SPACE" }
+            catch { return String(describing: error) }
+        }
+        for _ in 0..<100 {
+            let counts = try await stats()["requests"] as? [String: Int] ?? [:]
+            if counts["/shared-quota-image"] == 1 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let waitingStats = try await stats()
+        check((waitingStats["requests"] as? [String: Int] ?? [:])["/shared-quota-image"] == 1,
+            "The quota-limited preload reaches the loopback server before the foreground consumer joins")
+        let foreground = Task { try await sharedCache.loadImage(sharedQuotaImage) }
+        try await Task.sleep(for: .milliseconds(50))
+        sharedFreeBytes = 1_100_000_000
+        let foregroundImage = try await foreground.value
+        check(foregroundImage.size.width > 0, "The foreground consumer re-admits and decodes the image after preload quota failure")
+        let preloadResult = await sharedPreload.value
+        check(preloadResult == "LOW_SPACE", "The original prefetch caller retains its low-space result (\(preloadResult))")
+        let sharedQuotaStats = try await stats()
+        let sharedQuotaRequests = sharedQuotaStats["requests"] as? [String: Int] ?? [:]
+        check(sharedQuotaRequests["/shared-quota-image"] == 2,
+            "Shared quota failure is followed by exactly one foreground retry")
+        check((sharedQuotaStats["sameURLMax"] as? Int ?? 0) == 1,
+            "The shared URL never has concurrent HTTP writers during foreground re-admission")
+        let sharedQuotaTarget = sharedCacheFolder.appendingPathComponent(SHA256.hash(data: Data(sharedQuotaImage.absoluteString.utf8)).map { String(format: "%02x", $0) }.joined() + ".img")
+        check(FileManager.default.fileExists(atPath: sharedQuotaTarget.path), "The foreground retry commits its decoded image to cache")
+        check(sharedCache.pendingDownloadBudget == 0, "Both shared-flight reservations are released after re-admission")
+        let sharedTempFiles = (try FileManager.default.contentsOfDirectory(at: sharedCacheFolder, includingPropertiesForKeys: nil))
+        check(sharedTempFiles.count == 1 && sharedTempFiles.first?.standardizedFileURL == sharedQuotaTarget.standardizedFileURL,
+            "No partial or unfinished image file remains after shared quota re-admission: \(sharedTempFiles.map(\.path)); expected \(sharedQuotaTarget.path)")
         let oldBadURL = address("old-bad-cache")
         try Data("old corrupt cache".utf8).write(to: target(oldBadURL))
         _ = try await cache.loadImage(oldBadURL)

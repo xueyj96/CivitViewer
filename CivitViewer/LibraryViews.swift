@@ -405,16 +405,18 @@ private struct MediaGridCell: View {
     let item: MediaItem
     let blurred: Bool
     let open: () -> Void
-    @State private var failed = false
+    @State private var failure: String?
     @State private var retry = 0
     var body: some View {
         ZStack(alignment: .topTrailing) {
             Button(action: open) {
                 Group {
                     if item.isVideo, let source = item.mediaURL {
-                        CachedPoster(source: source, declared: item.posterURL, retryToken: retry, onFailure: { failed = $0 }).blur(radius: blurred ? 20 : 0)
+                        CachedPoster(source: source, declared: item.posterURL, retryToken: retry,
+                                     onFailure: { failure = $0 ? "封面暂时无法加载" : nil }, showsFailure: false).blur(radius: blurred ? 20 : 0)
                     } else if let url = item.mediaURL {
-                        CachedImage(url: url, allowsRetry: false, retryToken: retry, onFailure: { failed = $0 }).blur(radius: blurred ? 20 : 0)
+                        CachedImage(url: url, allowsRetry: false, retryToken: retry, showsFailure: false,
+                                    onFailureMessage: { failure = $0 }).blur(radius: blurred ? 20 : 0)
                     } else {
                         ZStack {
                             Color.secondary.opacity(0.1)
@@ -427,13 +429,48 @@ private struct MediaGridCell: View {
             if item.isVideo {
                 Image(systemName: "play.fill").font(.caption).foregroundStyle(.white).padding(8).background(.black.opacity(0.4), in: Circle()).padding(8).allowsHitTesting(false)
             }
-            if failed {
-                VStack { Spacer(); Button { retry += 1 } label: { Label(item.isVideo ? "重试封面" : "重试图片", systemImage: "arrow.clockwise").font(.caption) }
-                    .buttonStyle(AppActionButtonStyle()).padding(.bottom, 14) }.frame(maxWidth: .infinity)
+            if let failure {
+                MediaLoadFailureContent(message: failure, symbol: item.isVideo ? "play.rectangle" : "photo",
+                                        retryLabel: item.isVideo ? "重试封面" : "重试图片",
+                                        retryIdentifier: "media.grid.retry.\(item.id)", retry: { retry += 1 })
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }.frame(height: 230).clipShape(RoundedRectangle(cornerRadius: 9))
     }
 }
+
+#if DEBUG && targetEnvironment(simulator)
+/// Exercises production grid failures with missing local fixtures, no network.
+struct GridRetryQAView: View {
+    @State private var opened = 0
+    private var items: [MediaItem] {
+        [false, true].enumerated().map { index, video in
+            var item = MediaItem(id: 55_001 + index, url: "", width: 192, height: 256,
+                                 type: video ? "video" : "image", username: "LocalFixture", browsingLevel: 1, thumbnail: nil)
+            let missing = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("missing-grid55-\(index)")
+            item.offlineMediaURL = missing
+            if video { item.offlinePosterURL = missing }
+            return item
+        }
+    }
+    var body: some View {
+        VStack(spacing: 18) {
+            Text("本地加载失败布局").font(.headline)
+            HStack(spacing: 10) {
+                ForEach(items) { item in
+                    MediaGridCell(item: item, blurred: false, open: { opened += 1 })
+                        .frame(maxWidth: .infinity)
+                        .background(AppTheme.secondarySurface, in: RoundedRectangle(cornerRadius: 9))
+                }
+            }
+            Text("opened=\(opened)").accessibilityIdentifier("grid.retry.qa.opens")
+        }.padding(16).frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(uiColor: .systemBackground))
+            .preferredColorScheme(.dark)
+            .dynamicTypeSize(ProcessInfo.processInfo.arguments.contains("--qa-grid-retry-large55") ? .accessibility2 : .large)
+    }
+}
+#endif
 
 struct FollowingView: View {
     @EnvironmentObject private var session: SiteSession
