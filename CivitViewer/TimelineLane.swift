@@ -187,8 +187,13 @@ struct TimelineLane: View {
                 .environment(\.colorScheme, floatingHeader ? .dark : ordinaryColorScheme)
                 .accessibilityIdentifier(isVisible ? "timeline.media-kind" : "inactive.timeline.media-kind")
                 .accessibilityHidden(!isVisible)
-                Button { showFilter = true } label: { Image(systemName: "line.3.horizontal.decrease").font(.body).frame(width: 44, height: 44) }
-                    .accessibilityLabel("时间线筛选")
+                Button { showFilter = true } label: {
+                    ZStack {
+                        Image(systemName: "line.3.horizontal.decrease").opacity(model.restoreState.isRefreshing ? 0 : 1)
+                        if model.restoreState.isRefreshing { ProgressView().controlSize(.small).tint(floatingHeader ? .white : .primary) }
+                    }.font(.body).frame(width: 44, height: 44)
+                }
+                    .accessibilityLabel(model.restoreState.isRefreshing ? "正在刷新时间线，打开筛选" : "时间线筛选")
                     .accessibilityIdentifier(isVisible ? "timeline.filter" : "inactive.timeline.filter")
                 }
                 .frame(maxWidth: .infinity)
@@ -227,7 +232,7 @@ struct TimelineLane: View {
                 }.foregroundStyle(.white).background(.black.opacity(0.68), in: Capsule())
                     .timelineGestureFrame(in: gestureSpace).padding(.top, chromeHeight - 2).viewingChromeHidden(chrome.hidden)
             }
-            if let notice = model.notice {
+            if let notice = model.notice, notice.isError {
                 HStack(spacing: 10) {
                     Text(notice.text).font(.caption).lineLimit(notice.isError ? 5 : 3)
                         .accessibilityIdentifier("timeline.notice.text")
@@ -250,12 +255,6 @@ struct TimelineLane: View {
                     .accessibilityValue(notice.isError ? "错误，等待处理" : "约两秒半后收起，可点按关闭")
                     .timelineGestureFrame(in: gestureSpace)
                     .padding(.horizontal, 16).padding(.top, 102).viewingChromeHidden(chrome.hidden)
-            }
-            if model.restoreState.isRefreshing {
-                HStack(spacing: 9) { ProgressView().tint(.white); Text("正在按当前条件从头刷新…").font(.caption) }
-                    .padding(13).foregroundStyle(.white).background(.black.opacity(0.8), in: Capsule())
-                    .timelineGestureFrame(in: gestureSpace)
-                    .padding(.top, 102).accessibilityIdentifier("timeline.restart.loading").viewingChromeHidden(chrome.hidden)
             }
         }
         .coordinateSpace(name: gestureSpace)

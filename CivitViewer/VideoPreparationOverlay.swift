@@ -43,6 +43,7 @@ struct VideoPreparationOverlay: View {
     let canCancel: Bool
     let onCancel: () -> Void
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isPresented = false
     #if DEBUG && targetEnvironment(simulator)
     @State private var debugIdentity = UUID()
@@ -60,52 +61,32 @@ struct VideoPreparationOverlay: View {
     #endif
 
     var body: some View {
-        VStack(spacing: 4) {
+        VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
-                ProgressView().tint(.white).controlSize(.small).accessibilityHidden(true)
-                Text("正在准备视频")
-            }
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(.white)
-                .lineLimit(1)
-                .frame(maxWidth: .infinity, alignment: .center)
-
-            Text(detail)
-                .font(.system(size: 12))
-                .foregroundStyle(.white.opacity(0.88))
-                .lineLimit(2)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity)
-                .frame(height: 28, alignment: .center)
-
-            Group {
-                if let validProgress {
-                    ProgressView(value: validProgress)
-                        .tint(.white)
-                } else {
-                    Color.clear
+                ProgressView().tint(.white.opacity(0.8)).controlSize(.small).accessibilityHidden(true)
+                Text(detail)
+                    .font(.caption).foregroundStyle(.white.opacity(0.9))
+                    .lineLimit(canCancel ? 2 : 1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("media.preparation.detail")
+                if canCancel {
+                    Button(action: onCancel) {
+                        Text("取消").font(.caption.weight(.medium)).foregroundStyle(.white)
+                            .lineLimit(1).fixedSize()
+                            .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!isPresented || !visible)
+                    .accessibilityIdentifier("media.preparation.cancel")
                 }
             }
-            .frame(height: 4)
-            .opacity(validProgress == nil ? 0 : 1)
-            .accessibilityHidden(validProgress == nil)
-
-            Button(action: onCancel) {
-                Text("取消")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity, minHeight: 44, maxHeight: 44)
-                    .contentShape(Rectangle())
+            if let validProgress {
+                ProgressView(value: validProgress).tint(.white.opacity(0.8)).frame(height: 3)
             }
-            .buttonStyle(.plain)
-            .opacity(canCancel ? 1 : 0)
-            .disabled(!canCancel || !isPresented || !visible)
-            .accessibilityHidden(!canCancel || !isPresented || !visible)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .frame(width: 232, height: 132)
-        .background(Color.black.opacity(0.76), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(.horizontal, 10).padding(.vertical, canCancel ? 6 : 7)
+        .frame(maxWidth: 272, alignment: .leading)
+        .background(Color.black.opacity(0.38), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .anchorPreference(key: VideoPreparationGestureAnchorKey.self, value: .bounds) { anchor in
             isPresented && visible && canCancel ? anchor : nil
         }
@@ -120,18 +101,31 @@ struct VideoPreparationOverlay: View {
         .accessibilityHidden(!isPresented)
         .task(id: visible) {
             if visible {
-                try? await Task.sleep(for: .milliseconds(180))
+                try? await Task.sleep(for: .milliseconds(350))
                 guard !Task.isCancelled else { return }
-                withAnimation(.easeInOut(duration: 0.16)) {
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.16)) {
                     isPresented = true
                 }
             } else {
-                withAnimation(.easeInOut(duration: 0.16)) {
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.16)) {
                     isPresented = false
                 }
             }
         }
         .onDisappear { isPresented = false }
+    }
+}
+
+// Put waiting feedback above the existing social/progress controls. The frame
+// anchor stays on the small bar, so only repair actions exclude media gestures.
+extension View {
+    func videoPreparationPlacement(bottomClearance: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            Spacer(minLength: 0)
+            HStack(spacing: 0) { self; Spacer(minLength: 0) }
+                // Reserve the right-side 44pt action column and a 12pt gap.
+                .padding(.leading, 20).padding(.trailing, 76).padding(.bottom, bottomClearance)
+        }
     }
 }
 
@@ -185,10 +179,10 @@ struct VideoPreparationOverlayQAView: View {
                     visible: stage != .hidden,
                     detail: detail,
                     progress: progress,
-                    canCancel: stage != .hidden,
+                    canCancel: stage == .repair,
                     onCancel: { cancelCount += 1; stage = .hidden }
                 )
-                .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
+                .videoPreparationPlacement(bottomClearance: 130)
 
                 VStack {
                     Text(qaValue)

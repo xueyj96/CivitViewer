@@ -122,44 +122,23 @@ final class ResumePromptUITests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["qa-state"].waitForExistence(timeout: 20), "QA observer must become available")
     }
 
-    func testNilContinuationRestoreToastExpiresAndPromptStaysConsumed() {
-        launchQA("restore-legacy-nil")
-
-        let resume = app.buttons["timeline.resume"]
-        XCTAssertTrue(resume.waitForExistence(timeout: 10), "The seeded legacy checkpoint should offer resume")
-        resume.tap()
-
-        let notice = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "已恢复保存的片段")).firstMatch
-        XCTAssertTrue(notice.waitForExistence(timeout: 10), "Tap should restore the nil-continuation checkpoint and show success")
-        attachScreenshot(named: "nil-continuation-success-notice")
-        XCTAssertTrue(notice.waitForNonExistence(timeout: 5), "Success notice should expire without another interaction")
-
-        let viewport = activeMediaDeck()
-        XCTAssertTrue(viewport.waitForExistence(timeout: 5))
-        viewport.swipeUp()
-        mainTabButton("作者榜").tap()
-        mainTabButton("时间线").tap()
-        XCTAssertFalse(resume.exists, "Consumed prompt must not return after swipe and tab navigation")
-        XCTAssertFalse(notice.exists, "Expired success notice must stay dismissed after redraw")
-    }
-
-    func testNilContinuationRestoreToastCanBeClosedByRealTap() {
+    func testRestore58ConsumesCheckpointWithoutSuccessToast() {
         launchQA("restore-legacy-nil")
         let resume = app.buttons["timeline.resume"]
         XCTAssertTrue(resume.waitForExistence(timeout: 10))
         resume.tap()
-        let notice = app.descendants(matching: .any)["timeline.notice"]
-        XCTAssertTrue(notice.waitForExistence(timeout: 10))
-        app.buttons["timeline.notice.close"].tap()
-        XCTAssertTrue(notice.waitForNonExistence(timeout: 3), "The close control must dismiss the informational notice")
+        XCTAssertTrue(app.descendants(matching: .any)["qa-state"].waitForValueToContain("state=resumed-", timeout: 10))
+        XCTAssertFalse(app.descendants(matching: .any)["timeline.notice"].exists,
+                       "Normal cache restoration must not cover the media with a success toast")
+        attachScreenshot(named: "loading58-restored-checkpoint-without-toast")
         activeMediaDeck().swipeUp()
         mainTabButton("作者榜").tap()
         mainTabButton("时间线").tap()
-        XCTAssertFalse(resume.exists, "Closing the toast must not revive the consumed prompt")
-        XCTAssertFalse(notice.exists)
+        XCTAssertFalse(resume.exists, "The consumed checkpoint stays dismissed after paging and a tab cycle")
+        XCTAssertFalse(app.descendants(matching: .any)["timeline.notice"].exists)
     }
 
-    func testVideoSeekRemainsTouchableWhileRestoreNoticeIsVisibleAndPlayerIsMuted() {
+    func testVideoSeek58RemainsTouchableAfterSilentCacheRestore() {
         launchQA("restore-video-legacy-nil")
         let resume = app.buttons["timeline.resume"]
         XCTAssertTrue(resume.waitForExistence(timeout: 10))
@@ -189,11 +168,11 @@ final class ResumePromptUITests: XCTestCase {
 
         resume.tap()
         let notice = app.descendants(matching: .any)["timeline.notice"]
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "已恢复保存的片段")).firstMatch.waitForExistence(timeout: 2))
-        XCTAssertTrue(notice.exists, "The notice must still be visible before touching seek")
-        XCTAssertTrue(seek.isHittable, "The real seek control must remain hittable while the notice is on screen")
+        XCTAssertTrue(app.descendants(matching: .any)["qa-state"].waitForValueToContain("state=resumed-", timeout: 10))
+        XCTAssertFalse(notice.exists, "Successful cache restoration stays silent")
+        XCTAssertTrue(seek.isHittable, "The real seek control remains usable after cache restoration")
         let before = seek.valueDescription
-        attachScreenshot(named: "video-seek-with-restore-notice")
+        attachScreenshot(named: "loading58-video-seek-after-silent-restore")
         let beforeSeconds = seekSeconds(before)
         XCTAssertNotNil(beforeSeconds, "Could not parse the player's current progress: \(before)")
         let didSeek = expectation(for: NSPredicate(format: "value != %@", before), evaluatedWith: seek)
@@ -234,9 +213,9 @@ final class ResumePromptUITests: XCTestCase {
         resume.tap()
 
         let notice = app.descendants(matching: .any)["timeline.notice"]
-        XCTAssertTrue(notice.waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "已恢复保存的片段")).firstMatch.waitForExistence(timeout: 3))
-        attachScreenshot(named: "success-before-restart-error")
+        XCTAssertTrue(app.descendants(matching: .any)["qa-state"].waitForValueToContain("state=resumed-", timeout: 10))
+        XCTAssertFalse(notice.exists, "The informational restoration event must stay out of the watching UI")
+        attachScreenshot(named: "loading58-silent-restore-before-restart-error")
         let pageState = app.descendants(matching: .any)["qa-state"]
         let beforeRestart = pageState.valueDescription
         let firstPageCount = metric("firstPageRequests", in: beforeRestart)
@@ -1202,69 +1181,78 @@ final class ResumePromptUITests: XCTestCase {
         XCTAssertEqual(playerFields()["muted"], "true")
         attachPlayback43("broken-cache-auto")
     }
-    func testPreparation48KeepsOneLayerAcrossLoadingRepairAndPlayer() {
-        app = XCUIApplication(); app.launchArguments = ["--qa-preparation48"]; app.launch()
+    func testPreparation58UsesOneSmallEdgeStatusAndCancelableRepair() {
+        app = XCUIApplication(); app.launchArguments = ["--qa-preparation48", "-muted", "YES"]; app.launch()
         let panel = app.descendants(matching: .any).matching(identifier: "media.preparation").firstMatch
         let qa = app.descendants(matching: .any).matching(identifier: "media.qa.preparation48").firstMatch
-        XCTAssertTrue(panel.waitForExistence(timeout: 5))
-        XCTAssertTrue(qa.waitForExistence(timeout: 5))
+        XCTAssertTrue(panel.waitForExistence(timeout: 5)); XCTAssertTrue(qa.waitForExistence(timeout: 5))
         func state() -> String { qa.value as? String ?? qa.label }
-        func identity() -> String {
-            panel.valueDescription.components(separatedBy: ";").first ?? "missing"
-        }
+        func identity() -> String { panel.valueDescription.components(separatedBy: ";").first ?? "missing" }
         let original = identity(), frame = panel.frame
         XCTAssertTrue(original.hasPrefix("id=")); XCTAssertTrue(panel.valueDescription.contains("progress=unknown"))
         XCTAssertTrue(state().contains("stage=native;visible=1;presented=1"))
+        XCTAssertLessThan(frame.height, 70, "Ordinary loading should use one compact edge status")
+        XCTAssertGreaterThan(frame.minY, app.frame.midY, "The center of the media stays unobstructed")
+        XCTAssertLessThanOrEqual(frame.minX, 24)
+        XCTAssertFalse(app.buttons["media.preparation.cancel"].exists)
+        XCTAssertTrue(state().contains("panel=0,0,0,0"), "Passive waiting must not exclude media gestures")
         for button in ["修复 65%", "新播放器", "原生加载"] {
             app.buttons[button].tap()
             XCTAssertEqual(identity(), original)
             XCTAssertTrue(state().contains("visible=1;presented=1"))
             XCTAssertEqual(panel.frame.width, frame.width, accuracy: 1)
-            XCTAssertEqual(panel.frame.height, frame.height, accuracy: 1)
-            XCTAssertEqual(panel.frame.midX, frame.midX, accuracy: 1)
-            XCTAssertEqual(panel.frame.midY, frame.midY, accuracy: 1)
+            XCTAssertEqual(panel.frame.maxY, frame.maxY, accuracy: 1)
+            XCTAssertLessThan(panel.frame.height, 80)
         }
         app.buttons["修复 65%"].tap()
         XCTAssertTrue(panel.valueDescription.contains("progress=0.65"))
-        XCTAssertTrue(state().contains("stage=repair;visible=1;presented=1"))
-        XCTAssertFalse(state().contains("panel=0,0,0,0"), "The visible panel must publish its gesture exclusion frame")
-        XCTAssertTrue(state().contains(",232,132"), "The published gesture frame must match the fixed panel size")
-        attachScreenshot(named: "preparation48-one-stable-layer")
-
+        XCTAssertFalse(state().contains("panel=0,0,0,0"), "Interactive repair must publish its actual gesture exclusion")
+        XCTAssertTrue(app.buttons["media.preparation.cancel"].isHittable)
+        attachScreenshot(named: "loading58-one-small-edge-status-repair")
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.30)).press(forDuration: 0.65)
-        waitUntil("A center hold outside the visible panel reaches the real gesture layer") {
-            state().contains("chromeHoldCount=1")
+        waitUntil("A center hold outside the status reaches the real gesture layer") { state().contains("chromeHoldCount=1") }
+        XCTAssertTrue(state().contains("tapCount=0"))
+        app.staticTexts["media.preparation.detail"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.65)
+        XCTAssertTrue(state().contains("cancelCount=0;tapCount=0;chromeHoldCount=1"), "Repair status gestures must not leak to the media")
+        app.buttons["media.preparation.cancel"].tap()
+        waitUntil("Cancel hides the status and removes its gesture exclusion") {
+            state().contains("stage=hidden;visible=0;presented=0;cancelCount=1") && state().contains("panel=0,0,0,0")
         }
-        XCTAssertTrue(state().contains("tapCount=0"), "The center hold must not also trigger tap")
-        attachScreenshot(named: "preparation48-outside-center-hold")
-
-        let cancelButton = app.buttons["取消"]
-        let preparationTitle = app.staticTexts["正在准备视频"]
-        preparationTitle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.65)
-        let panelLongPressState = state()
-        let panelLongPressFrames = "panel=\(panel.frame);cancel=\(cancelButton.frame);title=\(preparationTitle.frame)"
-        print("PREPARATION48_PANEL_LONGPRESS state=\(panelLongPressState);\(panelLongPressFrames)")
-        attachScreenshot(named: "preparation48-panel-long-press-excluded")
-        XCTAssertTrue(panelLongPressState.contains("cancelCount=0;tapCount=0;chromeHoldCount=1"),
-                      "A long press on the preparation panel must not reach tap or chrome hold; state=\(panelLongPressState); \(panelLongPressFrames)")
-
-        app.buttons["取消"].tap()
-        waitUntil("Preparation cancel updates QA state and disables panel") {
-            state().contains("stage=hidden;visible=0;presented=0;cancelCount=1") &&
-                state().contains("tapCount=0;chromeHoldCount=1") && state().contains("panel=0,0,0,0")
-        }
-        let cancel = app.buttons["取消"]
-        XCTAssertTrue(!cancel.exists || !cancel.isHittable, "Cancelled preparation must not retain an active cancel target")
-        attachScreenshot(named: "preparation48-cancelled-inert-panel")
-
+        let cancel = app.buttons["media.preparation.cancel"]
+        XCTAssertTrue(!cancel.exists || !cancel.isHittable)
+        attachScreenshot(named: "loading58-cancelled-inert-status")
         app.buttons["原生加载"].tap()
-        waitUntil("The same panel can show again after cancellation") {
-            state().contains("stage=native;visible=1;presented=1")
-        }
+        waitUntil("The same small status can appear again") { state().contains("stage=native;visible=1;presented=1") }
         XCTAssertEqual(identity(), original)
-        XCTAssertEqual(panel.frame.width, frame.width, accuracy: 1)
         XCTAssertEqual(panel.frame.height, frame.height, accuracy: 1)
+        attachScreenshot(named: "loading58-ordinary-waiting-edge")
     }
+    func testPreparation58RealPageKeepsCancelClearOfActionsInCompactLayouts() {
+        for (large, landscape) in [(false, false), (true, true)] {
+            visualLaunch(width: 320, large: large, landscape: false, extra: ["--qa-preparation58", "-muted", "YES"])
+            app.segmentedControls["timeline.media-kind"].buttons["视频"].tap()
+            waitPlayingFixture()
+            if landscape && app.windows.firstMatch.frame.width < app.windows.firstMatch.frame.height { app.buttons["手动切换横竖屏"].tap() }
+            heightWaitOrientation(landscape: landscape)
+            let cancel = app.buttons["media.preparation.cancel"]
+            XCTAssertTrue(cancel.waitForExistence(timeout: 8)); XCTAssertTrue(cancel.isHittable)
+            let panel = app.descendants(matching: .any).matching(identifier: "media.preparation").firstMatch
+            let details = app.buttons.matching(NSPredicate(format: "label == %@", "作品详情")).firstMatch
+            let mute = app.buttons.matching(NSPredicate(format: "label == %@", "取消静音")).firstMatch
+            XCTAssertTrue(details.exists && mute.exists)
+            XCTAssertFalse(panel.frame.intersects(details.frame), "The entire status must avoid the details target")
+            XCTAssertFalse(panel.frame.intersects(mute.frame), "The status must avoid the mute target")
+            XCTAssertLessThanOrEqual(panel.frame.maxX + 8, details.frame.minX)
+            attachScreenshot(named: "loading58-real-page-clear-actions-large-\(large)-landscape-\(landscape)")
+            cancel.tap()
+            XCTAssertTrue(cancel.waitForNonExistence(timeout: 5))
+            XCTAssertFalse(app.navigationBars["作品详情"].exists, "Cancel must not open the overlapping sibling details action")
+            XCTAssertTrue(details.isHittable)
+            XCTAssertEqual(playerFields()["muted"], "true")
+            app.terminate(); XCUIDevice.shared.orientation = .portrait
+        }
+    }
+
     private func assertAutomaticRepair47(_ mode: String, codec: Int) {
         launchPlayback43(mode)
         waitUntil("A repaired native player must display a frame and advance", timeout: 35) {
@@ -1844,6 +1832,33 @@ final class ResumePromptUITests: XCTestCase {
         XCTAssertLessThan(abs(afterSeconds - 15), 2)
     }
 
+    func testAuthorActivity58CompactSummaryAndProgressiveChecks() {
+        app = XCUIApplication()
+        app.launchArguments = ["--qa-collection-paging", "--qa-theme-ui", "--qa-author-activity58", "-muted", "YES"]
+        app.launch()
+        mainTabButton("作者榜").tap()
+        app.buttons["leaderboard.recent-filter"].tap()
+        app.buttons["近 24 小时"].tap()
+        let summary = app.staticTexts["leaderboard.activity.summary"]
+        XCTAssertTrue(summary.waitForExistence(timeout: 8))
+        waitUntil("Only the bounded first forty authors are checked") { summary.label.contains("符合 10 位") && summary.label.contains("40/1,000") }
+        let first = app.buttons["leaderboard.author.59004"]
+        XCTAssertTrue(first.exists && first.isHittable)
+        XCTAssertLessThan(first.frame.minY, app.frame.height * 0.45, "The results begin in the upper half of the screen")
+        XCTAssertFalse(app.staticTexts["未知、失败或尚未扫完表示待核实，不代表没有更新。"].exists)
+        attachScreenshot(named: "author58-compact-activity-first-results")
+        app.buttons["leaderboard.activity.more"].tap()
+        app.buttons["筛选说明"].tap()
+        XCTAssertTrue(app.navigationBars["作品更新筛选说明"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["未知、失败或尚未扫完表示待核实，不代表没有更新。"].exists)
+        attachScreenshot(named: "author58-explanation-on-demand")
+        app.buttons["完成"].tap()
+        app.buttons["leaderboard.activity.next"].tap()
+        waitUntil("An explicit next batch checks forty more and preserves the denominator") { summary.label.contains("符合 20 位") && summary.label.contains("80/1,000") }
+        XCTAssertTrue(first.exists)
+        attachScreenshot(named: "author58-explicit-second-batch")
+    }
+
     func testStyle48SearchTagsAndAuthorFilterInBothAppearances() {
         app = XCUIApplication()
         app.launchArguments = ["--qa-collection-paging", "--qa-theme-ui", "--qa-style48"]
@@ -2069,7 +2084,7 @@ final class ResumePromptUITests: XCTestCase {
         launchContinuation("filtered-empty")
         waitForAppearanceContinuation()
         let loading = app.descendants(matching: .any).matching(identifier: "feed.continuation.loading").firstMatch
-        XCTAssertTrue(loading.waitForExistence(timeout: 8))
+        XCTAssertFalse(loading.exists, "Background fill must not put a loading banner over an existing video")
         waitUntil("The current video must remain the active page while scanning") { self.watchFocus() == 28_037_102 }
         waitPlayingFixture()
         let before = playerFields()
@@ -2639,7 +2654,7 @@ final class ResumePromptUITests: XCTestCase {
             XCTAssertTrue(app.buttons["media.grid.cell.\(start)"].waitForExistence(timeout: 5))
             heightTap(app.buttons["media.grid.cell.\(start)"])
         } else {
-            let back = app.navigationBars.buttons.matching(identifier: "BackButton").allElementsBoundByIndex.first(where: { $0.isHittable })
+            let back = app.buttons.matching(identifier: "navigation.back").allElementsBoundByIndex.first(where: { $0.isHittable })
             XCTAssertNotNil(back); back?.tap()
         }
         heightAssert(route, phase: "author-return", expected: start)

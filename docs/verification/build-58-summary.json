@@ -1,0 +1,50 @@
+{
+  "version": "0.3.0",
+  "build": 58,
+  "verified_at_utc": "2026-10-28T18:52:12.625818+00:00",
+  "source_sha256": "e2f2f2be707063c6d80e34fecaf79423ae08896b1f26051e2177d873dc74b7ec",
+  "changes": [
+    "Compact creator-update counts and actions; explanation moved to on-demand sheet; unverified authors collapsed",
+    "Background pagination and filtered-page scanning remain active without banners over visible media",
+    "Normal cache restoration and refresh completion no longer show informational toasts; manual refresh uses filter-button activity",
+    "Delayed compact video preparation status; real repairs retain progress and cancel; width reserves right action column"
+  ],
+  "local_validation": {
+    "initial_candidate": {
+      "passed": 10,
+      "requested": 11,
+      "failure": "Stale test locator for native BackButton; actual app uses navigation.back"
+    },
+    "final_affected_candidate": {
+      "passed": 4,
+      "requested": 4,
+      "covers": [
+        "eight filtered pages fill without player/focus replacement",
+        "one preparation layer, cancellation and gesture exclusion",
+        "real media page 320pt portrait and large-type actual landscape; status avoids details/mute; cancel does not open details",
+        "viewport height and neighbor overlap through paging, rotation, author entry and return"
+      ]
+    },
+    "distinct_passing_ui_cases": 12,
+    "browsing_policy_and_publication_checks": 69,
+    "neutral_local_fixtures_only": true,
+    "real_site_probe_requests": 0,
+    "simulated_repair_progress_is_not_engine_transcode_evidence": true
+  },
+  "device_delivery": {
+    "independent_installed_version_readback": "0.3.0 (58)",
+    "six_metadata_scopes_unchanged": true,
+    "regular_files": 347,
+    "method": "Paths, sizes, mtimes only; no user-file contents copied or hashed",
+    "app_auto_launched": false,
+    "real_phone_visual_acceptance": "NOT_TESTED"
+  },
+  "public_ipa": {
+    "configuration": "Release",
+    "personal_provisioning_profiles": 0,
+    "personal_certificate_signatures": 0,
+    "personal_signing_entitlements": 0,
+    "recipient_resigning_required": true,
+    "recipient_install_after_resigning": "NOT_TESTED"
+  }
+}

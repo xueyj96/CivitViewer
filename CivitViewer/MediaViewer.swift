@@ -407,7 +407,8 @@ struct MediaDeck: View {
         }.clipped().background(.black)
             .overlay(alignment: .top) {
                 if showsLoadMore, let state = continuationState, viewerVisible,
-                   (focused == visibleItems.last?.id || state.failure != nil || state.isLoading),
+                   !state.isLoading,
+                   (focused == visibleItems.last?.id || state.failure != nil),
                    !chrome.isHidden(for: orientationScope) {
                     FeedContinuationStatusView(state: state, empty: false, darkCanvas: true,
                         performing: continuationAction != nil, restartRetryAvailableAt: restartRetryAvailableAt,

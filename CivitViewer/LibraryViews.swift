@@ -42,6 +42,8 @@ private struct LeaderboardList: View {
     @State private var loading = false
     @State private var loaded = false
     @State private var error: String?
+    @State private var showActivityInfo = false
+    @State private var showUnknown = false
     @StateObject private var activity = CreatorActivityStore()
     private struct ActivityKey: Equatable { let visible: Bool; let active: Bool; let identity: String; let ids: [Int] }
     private var activityKey: ActivityKey { .init(visible: visible, active: recent != .any, identity: session.feedIdentity, ids: entries.map(\.id)) }
@@ -53,6 +55,11 @@ private struct LeaderboardList: View {
         }
     }
     private var unknown: [LeaderboardEntry] { entries.filter { activity.result(for: $0.id) == nil || activity.result(for: $0.id) == .unverified } }
+    private var activitySummary: String {
+        let verified = (entries.count - unknown.count).formatted(.number.locale(Locale(identifier: "en_US")))
+        let total = entries.count.formatted(.number.locale(Locale(identifier: "en_US")))
+        return "符合 \(matching.count) 位 · 已核实 \(verified)/\(total)"
+    }
     var body: some View {
         Group {
             if entries.isEmpty {
@@ -63,25 +70,64 @@ private struct LeaderboardList: View {
                 List {
                     if recent != .any {
                         Section {
-                            Text("已核实 \(entries.count - unknown.count) / \(entries.count) 位，符合条件 \(matching.count) 位").font(.subheadline)
-                            if activity.busy { ProgressView("正在核实作品发布时间…") }
-                            else if !unknown.isEmpty {
-                                Button("继续核实下一批作者") { Task { await activity.checkNext(entries.map(\.user), source: session) } }
-                                Button("重试待核实作者") { Task { await activity.checkNext(unknown.map(\.user), source: session, retryUnknown: true) } }
+                            HStack(spacing: 10) {
+                                Text(activitySummary)
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.8)
+                                    .accessibilityIdentifier("leaderboard.activity.summary")
+                                Spacer(minLength: 2)
+                                if activity.busy {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                        .accessibilityLabel("正在核实作品发布时间")
+                                } else {
+                                    Button("继续") { Task { await activity.checkNext(entries.map(\.user), source: session) } }
+                                        .font(.subheadline.weight(.semibold))
+                                        .buttonStyle(.plain)
+                                        .foregroundStyle(.blue)
+                                        .controlSize(.small)
+                                        .frame(minWidth: 44, minHeight: 44)
+                                        .accessibilityLabel("继续核实下一批作者")
+                                        .disabled(unknown.isEmpty)
+                                        .accessibilityIdentifier("leaderboard.activity.next")
+                                }
+                                Menu {
+                                    Button("重试待核实作者") {
+                                        Task { await activity.checkNext(unknown.map(\.user), source: session, retryUnknown: true) }
+                                    }
+                                    .disabled(activity.busy || unknown.isEmpty)
+                                    Button("筛选说明") { showActivityInfo = true }
+                                        .accessibilityIdentifier("leaderboard.activity.info")
+                                } label: {
+                                    Image(systemName: "ellipsis")
+                                        .font(.subheadline.weight(.semibold))
+                                        .frame(width: 44, height: 44)
+                                        .contentShape(Rectangle())
+                                }
+                                .accessibilityLabel("作品更新筛选更多操作")
+                                .accessibilityIdentifier("leaderboard.activity.more")
                             }
-                        } footer: { Text("依据当前账号可见的已发布图片／视频作品帖。原榜单名次保留；未核实、失败或扫描未完成的作者单列待核实，不能视为没有更新。结果缓存 10 分钟。") }
+                        }
                     }
                     Section(recent == .any ? "榜单作者" : "符合更新范围") {
                         ForEach(matching) { entry in row(entry) }
                         if matching.isEmpty { Text("当前已核实作者中没有符合条件的结果").foregroundStyle(.secondary) }
                     }
                     if recent != .any && !unknown.isEmpty {
-                        Section("待核实 · \(unknown.count) 位") { ForEach(unknown) { entry in row(entry) } }
+                        Section {
+                            DisclosureGroup("待核实 · \(unknown.count) 位", isExpanded: $showUnknown) {
+                                ForEach(unknown) { entry in row(entry) }
+                            }
+                            .accessibilityIdentifier("leaderboard.activity.unknown")
+                        }
                     }
                 }.listStyle(.plain).refreshable { await load() }
                     .overlay(alignment: .bottom) {
-                        if error != nil { Button("刷新失败，点此重试") { Task { await load() } }.padding(12).background(.regularMaterial, in: Capsule()).padding() }
+                        if error != nil { Button("刷新失败，点此重试") { Task { await load() } }.padding(12).background(AppTheme.secondarySurface, in: Capsule()).padding() }
                     }
+                    .sheet(isPresented: $showActivityInfo) { CreatorActivityInfoView() }
             }
         }.task(id: visible) { if visible && !loaded && !loading { await load() } }
             .task(id: activityKey) {
@@ -105,6 +151,7 @@ private struct LeaderboardList: View {
                 if session.following.contains(entry.user.id) { Image(systemName: "checkmark.circle.fill").foregroundStyle(.blue) }
             }.padding(.vertical, 7)
         }
+        .accessibilityIdentifier("leaderboard.author.\(entry.user.id)")
     }
     private func load() async {
         guard !loading else { return }
@@ -115,6 +162,30 @@ private struct LeaderboardList: View {
             guard !Task.isCancelled else { return }
             entries = value.filter { !$0.user.username.isEmpty }; loaded = true
         } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+    }
+}
+
+private struct CreatorActivityInfoView: View {
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        NavigationStack {
+            List {
+                Text("筛选依据当前账号可见的已发布图片／视频作品帖。")
+                Text("作者仍按原榜单名次排列。")
+                Text("未知、失败或尚未扫完表示待核实，不代表没有更新。")
+                Text("核实结果缓存 10 分钟。")
+            }
+            .listStyle(.plain)
+            .navigationTitle("作品更新筛选说明")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { dismiss() }
+                }
+            }
+        }
+        .accessibilityIdentifier("leaderboard.activity.info-sheet")
+        .presentationDetents([.medium, .large])
     }
 }
 

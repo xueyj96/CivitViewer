@@ -174,6 +174,13 @@ struct VideoSurface<Footer: View>: View {
     @State private var repairStage: MediaRepairStage?
     @State private var repairProgress: Double?
     @State private var preparationGestureFrame: CGRect = .zero
+    #if DEBUG && targetEnvironment(simulator)
+    @State private var qaPreparationCancelled = false
+    private var qaPreparationActive: Bool {
+        VisualControlsQA.enabled && ProcessInfo.processInfo.arguments.contains("--qa-preparation58") &&
+            !qaPreparationCancelled && active
+    }
+    #endif
     @State private var repairedPinnedURL: URL?
     @State private var repairPlayingRecorded = false
     @State private var repairFirstPosition: Double?
@@ -262,9 +269,17 @@ struct VideoSurface<Footer: View>: View {
         #endif
         return active && !playbackFailed && seekTarget == nil && (awaitingResume || !itemReady || ((playing || holdingRate) && (waitingForData || !readyForDisplay)))
     }
-    private var preparingVideo: Bool { active && (loading || (playbackFailed && recovering)) }
+    private var preparingVideo: Bool {
+        #if DEBUG && targetEnvironment(simulator)
+        if qaPreparationActive { return true }
+        #endif
+        return active && (loading || (playbackFailed && recovering))
+    }
     private var preparationCanCancel: Bool {
-        preparingVideo && recovering && repairStage != nil && (gesturesActive ?? active) && !chromeHidden && !pausedForOverlay
+        #if DEBUG && targetEnvironment(simulator)
+        if qaPreparationActive { return (gesturesActive ?? active) && !chromeHidden && !pausedForOverlay }
+        #endif
+        return preparingVideo && recovering && repairStage != nil && (gesturesActive ?? active) && !chromeHidden && !pausedForOverlay
     }
     private var effectiveGestureExcludedFrames: [CGRect] {
         guard !chromeHidden else { return [] }
@@ -275,6 +290,9 @@ struct VideoSurface<Footer: View>: View {
         return frames
     }
     private var preparationDetail: String {
+        #if DEBUG && targetEnvironment(simulator)
+        if qaPreparationActive { return "转换播放格式 65%" }
+        #endif
         if repairStage == .transcoding {
             return repairProgress.flatMap { $0.isFinite ? "转换播放格式 \(Int(min(max($0, 0), 1) * 100))%" : nil } ?? "正在转换播放格式"
         }
@@ -285,6 +303,9 @@ struct VideoSurface<Footer: View>: View {
         return itemReady ? "正在缓冲画面" : "正在加载视频"
     }
     private var preparationFraction: Double? {
+        #if DEBUG && targetEnvironment(simulator)
+        if qaPreparationActive { return 0.65 }
+        #endif
         if repairStage == .transcoding || repairStage == .downloading { return repairProgress }
         if repairStage == nil && !recovering && itemReady && duration > 0 && bufferedEnd > 0 { return min(bufferedEnd / duration, 1) }
         return nil
@@ -308,7 +329,9 @@ struct VideoSurface<Footer: View>: View {
             // replacement player; only its detail/progress changes in place.
             VideoPreparationOverlay(visible: preparingVideo, detail: preparationDetail,
                 progress: preparationFraction, canCancel: preparationCanCancel,
-                onCancel: cancelRepair).viewingChromeHidden(chromeHidden)
+                onCancel: cancelRepair)
+                .videoPreparationPlacement(bottomClearance: bottomBarHeight + 112)
+                .viewingChromeHidden(chromeHidden)
             if playbackFailed && !recovering {
                 VStack(spacing: 12) {
                     Text(recoveryMessage).foregroundStyle(.white)
@@ -779,6 +802,9 @@ struct VideoSurface<Footer: View>: View {
         }
     }
     private func cancelRepair() {
+        #if DEBUG && targetEnvironment(simulator)
+        if qaPreparationActive { qaPreparationCancelled = true; return }
+        #endif
         recoveryTask?.cancel(); recoveryTask = nil; playbackGeneration += 1
         recovering = false; repairStage = nil; repairProgress = nil
         recoveryMessage = "已停止本次修复，原视频已保留"

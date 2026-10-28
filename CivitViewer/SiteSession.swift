@@ -369,6 +369,12 @@ final class SiteSession: NSObject, ObservableObject, WKNavigationDelegate, WKUID
     func leaderboard(_ board: Board) async throws -> [LeaderboardEntry] {
         #if DEBUG && targetEnvironment(simulator)
         if CollectionPagingQA.enabled {
+            if ProcessInfo.processInfo.arguments.contains("--qa-author-activity58") {
+                let base = board == .legacy ? 58_000 : 59_000
+                return (1...1_000).map { index in
+                    LeaderboardEntry(position: index, user: Creator(id: base + index, username: "Pattern Creator \(index)"))
+                }
+            }
             return (0..<8).map { index in
                 LeaderboardEntry(position: index + 1, user: Creator(id: CollectionPagingQA.ownerID + index, username: "Pattern Creator \(index + 1)"))
             }
@@ -378,6 +384,11 @@ final class SiteSession: NSObject, ObservableObject, WKNavigationDelegate, WKUID
     }
 
     func latestPublication(creator: Creator) async throws -> PublicationResult {
+        #if DEBUG && targetEnvironment(simulator)
+        if CollectionPagingQA.enabled && ProcessInfo.processInfo.arguments.contains("--qa-author-activity58") {
+            return .published(Date().addingTimeInterval(creator.id.isMultiple(of: 4) ? -3_600 : -259_200))
+        }
+        #endif
         let identity = feedIdentity
         var cursor: PublicationCursor?
         var scan = PublicationScan(creatorID: creator.id)
