@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        F00100000000000000000040 /* FilterPresetViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00200000000000000000040; };
+        F0010000000000000000003F /* FilterPresets.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0020000000000000000003F; };
         F0010000000000000000003E /* TagMediaAvailability.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0020000000000000000003E; };
         F0010000000000000000003D /* VideoPosterFrame.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0020000000000000000003D; };
         F0010000000000000000003C /* VideoPreparationOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0020000000000000000003C; };
@@ -84,6 +86,8 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+        F00200000000000000000040 /* FilterPresetViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilterPresetViews.swift; sourceTree = "<group>"; };
+        F0020000000000000000003F /* FilterPresets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilterPresets.swift; sourceTree = "<group>"; };
         F0020000000000000000003E /* TagMediaAvailability.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagMediaAvailability.swift; sourceTree = "<group>"; };
         F0020000000000000000003D /* VideoPosterFrame.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPosterFrame.swift; sourceTree = "<group>"; };
         F0020000000000000000003C /* VideoPreparationOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPreparationOverlay.swift; sourceTree = "<group>"; };
@@ -218,6 +222,8 @@
                 F00200000000000000000031 /* ViewportAuditQA.swift */,
                 F00200000000000000000034 /* CompatibilityVideoView.swift */,
                 F0020000000000000000003E /* TagMediaAvailability.swift */,
+                F00200000000000000000040 /* FilterPresetViews.swift */,
+                F0020000000000000000003F /* FilterPresets.swift */,
                 F0020000000000000000003D /* VideoPosterFrame.swift */,
                 F0020000000000000000003C /* VideoPreparationOverlay.swift */,
                 F0020000000000000000003B /* OfflineDiskUsage.swift */,
@@ -398,6 +404,8 @@
                 F00100000000000000000031 /* ViewportAuditQA.swift in Sources */,
                 F00100000000000000000034 /* CompatibilityVideoView.swift in Sources */,
                 F0010000000000000000003E /* TagMediaAvailability.swift in Sources */,
+                F00100000000000000000040 /* FilterPresetViews.swift in Sources */,
+                F0010000000000000000003F /* FilterPresets.swift in Sources */,
                 F0010000000000000000003D /* VideoPosterFrame.swift in Sources */,
                 F0010000000000000000003C /* VideoPreparationOverlay.swift in Sources */,
                 F0010000000000000000003B /* OfflineDiskUsage.swift in Sources */,
@@ -485,7 +493,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 58;
+				CURRENT_PROJECT_VERSION = 60;
                 FRAMEWORK_SEARCH_PATHS = ("$(inherited)", "$(PROJECT_DIR)/Vendor",);
                 LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks",);
 				DEVELOPMENT_TEAM = 7QATRSJG37;
@@ -509,7 +517,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 58;
+				CURRENT_PROJECT_VERSION = 60;
                 FRAMEWORK_SEARCH_PATHS = ("$(inherited)", "$(PROJECT_DIR)/Vendor",);
                 LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks",);
 				DEVELOPMENT_TEAM = 7QATRSJG37;

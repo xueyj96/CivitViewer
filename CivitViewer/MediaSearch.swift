@@ -50,6 +50,14 @@ struct MediaSearchCriteria: Hashable, Identifiable {
 }
 enum MediaSearchTarget: Hashable, Identifiable {
     case author(Creator), tag(SearchTag), title(String), combined(MediaSearchCriteria)
+    var criteria: MediaSearchCriteria {
+        switch self {
+        case .author(let value): .init(author: value)
+        case .tag(let value): .init(tags: [value])
+        case .title(let value): .init(text: value)
+        case .combined(let value): value
+        }
+    }
     var id: String { switch self { case .author(let creator): "author:\(creator.id)"; case .tag(let tag): "tag:\(tag.id)"; case .title(let text): "title:" + text.lowercased(); case .combined(let criteria): criteria.id } }
     var title: String { switch self { case .author(let creator): "@" + creator.username; case .tag(let tag): "#" + tag.name; case .title(let text): "标题：" + text; case .combined: "搜索结果" } }
     var explanation: String { switch self { case .author: "这位作者在当前账号内容范围内的图片和视频。"; case .tag: "站点按所选标签 ID 搜索的图片和视频。"; case .title: MediaSearchMode.title.explanation; case .combined(let criteria): "需同时满足：" + criteria.summary + "。文本按作品帖标题前缀，不搜索 prompt。" } }

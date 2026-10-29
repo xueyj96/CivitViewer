@@ -23,10 +23,12 @@ enum DiagnosticCode: String, Codable, CaseIterable, Identifiable {
     case contextChanged, playbackFailed, seekFailed, loadFailed
     case appStarted, foreground, background, compatibilityPlaying
     case repairStarted, repairCompleted, repairedVideoPlaying
+    case frameReadyNetwork, frameReadyCache, frameReadyLocal
     case posterLoaded, posterFailed, posterCaptured
     case posterOpened, posterStarted, posterCancelled, posterCaptureStarted, posterDeferred
     case tagProbe, tagSearch
     var id: Self { self }
+    var isFrameReadyMeasurement: Bool { [.frameReadyNetwork, .frameReadyCache, .frameReadyLocal].contains(self) }
     var title: String {
         switch self {
         case .network: "网络请求失败"
@@ -47,6 +49,9 @@ enum DiagnosticCode: String, Codable, CaseIterable, Identifiable {
         case .repairStarted: "本机视频修复开始"
         case .repairCompleted: "本机视频修复完成"
         case .repairedVideoPlaying: "修复后原生播放已推进"
+        case .frameReadyNetwork: "网络视频首帧就绪"
+        case .frameReadyCache: "缓存视频首帧就绪"
+        case .frameReadyLocal: "本地视频首帧就绪"
         case .posterLoaded: "封面已取得"
         case .posterFailed: "封面加载失败"
         case .posterCaptured: "播放画面已保存为封面"

@@ -1,0 +1,87 @@
+{
+  "version": "0.3.0",
+  "build": 60,
+  "verified_at_utc": "2026-10-29T10:35:22.718652+00:00",
+  "source_sha256": "183cef9cd615e7f1dbe01404412bd1efe355de3c50bfbaeacd9fcf51215e2e7e",
+  "changes": [
+    "Saved filters scoped by stable account and recommendation/following/search; names, rename/delete, immutable validation and atomic local persistence",
+    "Compact preset library with one add action; one navigation stack with editable suggested name and structured condition preview",
+    "Re-rank moving preload window; foreground video buffering yields future video full-file transfers; current image shares its existing writer"
+  ],
+  "local_validation": {
+    "build60_affected_ui_passed": 3,
+    "build60_requested_ui": 3,
+    "build59_broader_ui_passed": 8,
+    "build59_requested_ui": 8,
+    "build60_changes_relative_to59": [
+      "FilterPresetViews.swift",
+      "project build number"
+    ],
+    "build59_logic_checks_with_identical60_sources": {
+      "filter_presets": 26,
+      "search": 75,
+      "timeline_model_fake_reads": 120,
+      "diagnostics": 47
+    },
+    "independent_source_review_open_material_findings": 0,
+    "neutral_local_fixtures_only": true,
+    "per_tag_network_probes": 0
+  },
+  "performance_local_only": {
+    "cold_runs": 3,
+    "nearest_request_ms_baseline": [
+      1469,
+      1475,
+      1487
+    ],
+    "nearest_request_ms_current": [
+      13,
+      16,
+      16
+    ],
+    "avplayer_item_ready_ms_baseline": [
+      961,
+      964,
+      1016
+    ],
+    "avplayer_item_ready_ms_current": [
+      962,
+      1005,
+      1228
+    ],
+    "startup_improvement_observed": false,
+    "image_handoff_single_writer_and_zero_budget": true,
+    "real_site_latency_before_after": "NOT_TESTED"
+  },
+  "device_delivery": {
+    "independent_installed_version_readback": "0.3.0 (60)",
+    "six_metadata_scopes_unchanged": true,
+    "regular_files": 429,
+    "method": "Paths, sizes, mtimes only; no user-file contents copied or hashed",
+    "real_phone_muted_playback": "Root observed real video motion and mute icon; launch arguments muted=YES",
+    "real_phone_preset_apply_flow": "USER_ASSISTED_PASS: user saved video filter, switched to images, applied the saved plan and confirmed videos were restored",
+    "safe_first_frame_sample": {
+      "source": "cache",
+      "ms": 60,
+      "samples": 1,
+      "not_a_before_after_comparison": true
+    },
+    "preset_readback_after_test": {
+      "schema": 1,
+      "recommendation_count": 0,
+      "user_confirmed_cleanup": "User deleted the test preset after successful UI verification",
+      "consistency": "Empty document matches the user-confirmed post-cleanup state",
+      "pre_deletion_document_contents": "NOT_INDEPENDENTLY_READ"
+    }
+  },
+  "public_ipa": {
+    "configuration": "Release",
+    "ipa_filename": "CivitViewer-0.3.0-build60-sideload.ipa",
+    "ipa_sha256": "4f1db58188a5609cc6f6327b5a9a047913b86d67331596281d8ce776f574957e",
+    "personal_provisioning_profiles": 0,
+    "personal_certificate_signatures": 0,
+    "personal_signing_entitlements": 0,
+    "recipient_resigning_required": true,
+    "recipient_install_after_resigning": "NOT_TESTED"
+  }
+}

@@ -154,6 +154,11 @@ struct VideoSurface<Footer: View>: View {
     @Environment(\.viewingBottomBarHeight) private var bottomBarHeight
     @State private var player: AVPlayer?
     @State private var actualSourceURL: URL?
+    @State private var preloadDemandOwner = UUID()
+    #if DEBUG
+    @State private var measuredStartupAt: TimeInterval?
+    @State private var measuredFirstFrame = false
+    #endif
     @State private var actualSourceKind: PlaybackDiagnosticSource = .network
     @State private var compatibilityAvailable = false
     @State private var nativeRetrySuspended = false
@@ -421,15 +426,20 @@ struct VideoSurface<Footer: View>: View {
             if phase != .active && repairStage != nil { cancelRepair() }
             if phase != .active { stopPosterCapture() }
             else { posterCaptureTried = false; installPosterOutput() }
+            updatePreloadDemand()
         }
+        .onChange(of: preparingVideo) { _, _ in updatePreloadDemand() }
         .onChange(of: muted) { _, value in player?.isMuted = value }
         .onChange(of: readyForDisplay) { _, value in
             onDisplayReady?(value && itemReady && !awaitingResume)
+            recordMeasuredFirstFrame()
             if value, let player, let item = player.currentItem { capturePosterFrame(player, item: item) }
         }
+        .onChange(of: itemReady) { _, _ in recordMeasuredFirstFrame() }
         .onChange(of: autoplay) { _, value in userIntent.reset(); if active { playing = value; syncPlayback() } }
         .onChange(of: pausedForOverlay) { _, value in
             syncPlayback()
+            updatePreloadDemand()
             if value { stopPosterCapture() }
             else { posterCaptureTried = false; installPosterOutput() }
             if !value, let item = player?.currentItem, item.status == .failed { handleFailure(item) }
@@ -467,6 +477,9 @@ struct VideoSurface<Footer: View>: View {
         qaPrepareCount += 1
         #endif
         if player == nil {
+            #if DEBUG
+            measuredStartupAt = ProcessInfo.processInfo.systemUptime; measuredFirstFrame = false
+            #endif
             playbackFailed = false; compatibilityAvailable = false; failureHandled = false; itemReady = false; readyForDisplay = false; waitingForData = true
             repairPlayingRecorded = false; repairFirstPosition = nil
             resumeApplied = false; resumeInFlight = false; onDisplayReady?(false)
@@ -481,6 +494,7 @@ struct VideoSurface<Footer: View>: View {
                 source.deletingLastPathComponent() == address.deletingLastPathComponent() ? .offline : (source != address && source.isFileURL ? .cache :
                 (source.isFileURL ? (diagnosticOffline ? .offline : .local) : .network)
             )
+            updatePreloadDemand(waiting: true)
             let item = AVPlayerItem(url: source); item.preferredForwardBufferDuration = 4
             let value = AVPlayer(playerItem: item); value.automaticallyWaitsToMinimizeStalling = true
             value.isMuted = muted; player = value
@@ -697,6 +711,7 @@ struct VideoSurface<Footer: View>: View {
         recoveryPosition = nil
     }
     private func retirePlayer() {
+        MediaCache.shared.removeForegroundVideoDemand(owner: preloadDemandOwner)
         stopPosterCapture()
         interactiveSeekID = nil
         if !resumeInFlight, itemReady, duration > 0 {
@@ -714,6 +729,25 @@ struct VideoSurface<Footer: View>: View {
         holdingRate = false; seekingBase = nil; seekTarget = nil
         if let pinnedURL { MediaCache.shared.unpin(pinnedURL) }; pinnedURL = nil
         if let repairedPinnedURL { MediaCache.shared.unprotectRepairFile(repairedPinnedURL) }; repairedPinnedURL = nil
+    }
+    private func updatePreloadDemand(waiting: Bool? = nil) {
+        guard active, scenePhase == .active, let source = actualSourceURL, !source.isFileURL else {
+            MediaCache.shared.removeForegroundVideoDemand(owner: preloadDemandOwner); return
+        }
+        MediaCache.shared.setForegroundVideoDemand(url: source, owner: preloadDemandOwner,
+            waiting: !pausedForOverlay && (waiting ?? preparingVideo))
+    }
+    private func recordMeasuredFirstFrame() {
+        #if DEBUG
+        guard ProcessInfo.processInfo.arguments.contains("--qa-continuous59"), active,
+              readyForDisplay, itemReady, !awaitingResume, !measuredFirstFrame,
+              let started = measuredStartupAt else { return }
+        measuredFirstFrame = true
+        let elapsed = max(0, ProcessInfo.processInfo.systemUptime - started)
+        let code: DiagnosticCode = actualSourceKind == .network ? .frameReadyNetwork :
+            (actualSourceKind == .cache ? .frameReadyCache : .frameReadyLocal)
+        LocalDiagnosticsStore.shared.note(area: .playback, code: code, count: Int(min(elapsed * 1_000, 1_000_000_000)))
+        #endif
     }
     private func handleFailure(_ item: AVPlayerItem, notificationError: NSError? = nil) {
         guard active, !pausedForOverlay, player?.currentItem === item, !failureHandled else { return }

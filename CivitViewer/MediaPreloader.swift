@@ -23,7 +23,6 @@ final class MediaPreloader: ObservableObject {
     private struct Job {
         let id: UUID
         let task: Task<Void, Never>
-        let priority: Int
         let networkRevision: Int
         let completionRevision: Int
     }
@@ -35,6 +34,8 @@ final class MediaPreloader: ObservableObject {
     private var completionRevision = 0
     private var networkCancellable: AnyCancellable?
     private var invalidationCancellable: AnyCancellable?
+    private var playbackCancellable: AnyCancellable?
+    private var playbackDemand = MediaCache.ForegroundVideoDemand()
     private var jobs: [Key: Job] = [:]
     private var desired: [Key] = []
     private var windowTarget = 6
@@ -86,6 +87,11 @@ final class MediaPreloader: ObservableObject {
                 self.failureCodes = [:]; self.spaceDeferred = [:]
                 self.cache.removePrefetchTargets(owner: self.owner)
             }
+        playbackCancellable = cache.foregroundVideoDemands.sink { [weak self] value in
+            guard let self else { return }
+            self.playbackDemand = value
+            self.reconcile()
+        }
     }
 
     var snapshot: Snapshot {
@@ -157,11 +163,12 @@ final class MediaPreloader: ObservableObject {
         desired = newDesired
         invalidated = false
 
-        let expiredJobs = jobs.keys.filter { !newSet.contains($0) && $0 != currentKey }
-        for key in expiredJobs {
-            jobs[key]?.task.cancel()
-            jobs[key] = nil
-        }
+        // A newly current remote video streams through AVPlayer; retaining its
+        // unfinished full-file prefetch would create a second transfer.
+        // Foreground images join the cache's existing file transfer, so retain
+        // their writer while the visible image view attaches to it.
+        let expiredJobs = jobs.keys.filter { !newSet.contains($0) && ($0 != currentKey || $0.video) }
+        for key in expiredJobs { cancelJob(key) }
         var protectedKeys = newSet
         if let currentKey, jobs[currentKey] != nil { protectedKeys.insert(currentKey) }
         let protected = protectedKeys.compactMap { key -> (URL, Bool)? in
@@ -200,8 +207,20 @@ final class MediaPreloader: ObservableObject {
     }
 
     private func cancelAll() {
-        for job in jobs.values { job.task.cancel() }
-        jobs.removeAll()
+        for key in Array(jobs.keys) { cancelJob(key) }
+    }
+
+    private func cancelJob(_ key: Key) {
+        guard let job = jobs.removeValue(forKey: key) else { return }
+        job.task.cancel(); attempted.remove(key)
+        // Cancellation releases a shared cache reservation asynchronously. Wake
+        // the current window after that release, including across filter swaps.
+        Task { @MainActor [weak self] in
+            await job.task.value
+            guard let self, !self.stopped, !self.invalidated else { return }
+            self.completionRevision += 1
+            self.reconcile()
+        }
     }
 
     private func reconcile() {
@@ -219,19 +238,32 @@ final class MediaPreloader: ObservableObject {
         for key in desired where key.video && wifiOnly && !networkValue && !ready.contains(key) {
             networkPaused.insert(key)
         }
-        let pausedJobs = jobs.keys.filter { $0.video && wifiOnly && !networkValue }
+        let pausedJobs = jobs.keys.filter { ($0.video && wifiOnly && !networkValue) || playbackBlocks($0) }
         for key in pausedJobs {
-            jobs[key]?.task.cancel()
-            jobs[key] = nil
-            attempted.remove(key)
+            cancelJob(key)
             failed.remove(key)
             failureCodes[key] = nil; spaceDeferred[key] = nil
         }
+        // Recompute ranks from the current window, including running jobs. A
+        // retained far download must yield to a newly nearest missing work.
+        let ranked = desired.compactMap { candidates[$0] }
+            .filter { !ready.contains($0.key) && (!attempted.contains($0.key) || jobs[$0.key] != nil) }
+            .filter { !($0.key.video && wifiOnly && !networkValue) && !playbackBlocks($0.key) }
+            .sorted { $0.priority < $1.priority }
+        let currentImages = Set(jobs.keys.filter { $0 == currentKey && !$0.video })
+        let futureSlots = max(0, concurrencyLimit - currentImages.count)
+        let preferred = currentImages.union(ranked.prefix(futureSlots).map(\.key))
+        for key in jobs.keys.filter({ !preferred.contains($0) }) {
+            cancelJob(key)
+        }
+        // Existing far reservations may be the very reason capacity is full;
+        // yield them before testing admission of the newly nearest target.
         guard cache.hasPrefetchSpace(video: false) else { return }
         while jobs.count < concurrencyLimit {
             guard let candidate = desired.compactMap({ candidates[$0] })
                 .filter({ !attempted.contains($0.key) && jobs[$0.key] == nil })
                 .filter({ !($0.key.video && wifiOnly && !networkValue) })
+                .filter({ !playbackBlocks($0.key) })
                 .sorted(by: { $0.priority < $1.priority }).first else { break }
             let key = candidate.key
             if key.url.isFileURL {
@@ -244,11 +276,15 @@ final class MediaPreloader: ObservableObject {
                 attempted.insert(key); ready.insert(key)
                 continue
             }
-            launch(key, priority: candidate.priority)
+            launch(key)
         }
     }
 
-    private func launch(_ key: Key, priority: Int) {
+    private func playbackBlocks(_ key: Key) -> Bool {
+        key.video && (playbackDemand.waiting || playbackDemand.urls.contains(key.url))
+    }
+
+    private func launch(_ key: Key) {
         let id = UUID()
         let cache = self.cache
         attempted.insert(key)
@@ -264,7 +300,7 @@ final class MediaPreloader: ObservableObject {
                 self.finish(key, id: id, success: false, code: code, space: space)
             }
         }
-        jobs[key] = Job(id: id, task: task, priority: priority, networkRevision: networkRevision, completionRevision: completionRevision)
+        jobs[key] = Job(id: id, task: task, networkRevision: networkRevision, completionRevision: completionRevision)
     }
 
     private func finish(_ key: Key, id: UUID, success: Bool, code: DiagnosticCode? = nil, space: Bool = false) {
@@ -292,6 +328,8 @@ final class MediaPreloader: ObservableObject {
             oversized: failures.filter { failureCodes[$0] == .limit }.count,
             spaceLimited: failures.filter { failureCodes[$0] == .storage }.count,
             networkFailed: failures.filter { failureCodes[$0] == .network || failureCodes[$0] == .http }.count)
-        cache.setPreloadStatus(value, owner: owner)
+        var status = value
+        status.playbackDeferred = primary.filter { !ready.contains($0) && playbackBlocks($0) }.count
+        cache.setPreloadStatus(status, owner: owner)
     }
 }

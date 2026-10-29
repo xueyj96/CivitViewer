@@ -42,7 +42,7 @@ struct LocalDiagnosticsView: View {
                         HStack(spacing: 10) {
                             Text(entry.timestamp.formatted(.dateTime.locale(Locale(identifier: "zh_Hans_CN")).month().day().hour().minute().second()))
                             Text("版本 \(entry.build)")
-                            if let count = entry.count { Text("数量 \(count)") }
+                            if let count = entry.count { Text(entry.code.isFrameReadyMeasurement ? "首帧 \(count) ms" : "数量 \(count)") }
                             if entry.suppressed > 0 { Text("合并 \(entry.suppressed) 条重复记录") }
                         }.font(.caption).foregroundStyle(.secondary)
                         if let playback = entry.playback {

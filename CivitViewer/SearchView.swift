@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct SearchView: View {
+    @EnvironmentObject private var session: SiteSession
     @StateObject private var directory = TagDirectoryStore(diagnostics: .shared)
     @State private var text = ""
     @State private var author: Creator?
@@ -9,6 +10,10 @@ struct SearchView: View {
     @State private var showAuthors = false
     @State private var showMatchingHelp = false
     @State private var destination: MediaSearchTarget?
+    @State private var filter = FeedFilter(kind: .all, sort: "Newest", period: "AllTime")
+    @State private var showFilter = false
+    @State private var presetRequest: FilterPresetRequest?
+    @FocusState private var titleFocused: Bool
     init(initialCriteria: MediaSearchCriteria = .init()) {
         _text = State(initialValue: initialCriteria.text)
         _author = State(initialValue: initialCriteria.author)
@@ -21,8 +26,8 @@ struct SearchView: View {
                 HStack {
                     Text("搜索条件").font(.headline)
                     Spacer()
-                    if !text.isEmpty || author != nil || !tags.isEmpty {
-                        Button("清空") { text = ""; author = nil; tags = [] }
+                    if !text.isEmpty || author != nil || !tags.isEmpty || filter != .defaults(for: .creator) {
+                        Button("清空") { text = ""; author = nil; tags = []; filter = .defaults(for: .creator) }
                             .buttonStyle(AppActionButtonStyle())
                             .accessibilityLabel("清空全部条件")
                     }
@@ -36,6 +41,7 @@ struct SearchView: View {
                     HStack(spacing: 8) {
                         TextField("输入作品帖标题前缀", text: $text)
                             .frame(minHeight: 44).accessibilityIdentifier("search-title-input")
+                            .focused($titleFocused)
                             .textInputAutocapitalization(.never).autocorrectionDisabled()
                             .submitLabel(.search).onSubmit(search)
                         if !text.isEmpty {
@@ -45,7 +51,7 @@ struct SearchView: View {
                     }
                     Divider()
                     HStack(spacing: 8) {
-                        Button { showAuthors = true } label: {
+                        Button { titleFocused = false; showAuthors = true } label: {
                             HStack(spacing: 10) {
                                 Image(systemName: "person.crop.circle").foregroundStyle(.secondary)
                                 Text(author.map { "@" + $0.username } ?? "选择作者").lineLimit(2)
@@ -63,7 +69,7 @@ struct SearchView: View {
                         Label("标签", systemImage: "tag").font(.subheadline.weight(.medium))
                         Text("\(tags.count) / 8").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                         Spacer()
-                        Button { showTags = true } label: { Label(tags.isEmpty ? "选择" : "调整", systemImage: "plus") }
+                        Button { titleFocused = false; showTags = true } label: { Label(tags.isEmpty ? "选择" : "调整", systemImage: "plus") }
                             .buttonStyle(AppActionButtonStyle(tone: .accent))
                             .accessibilityLabel(tags.isEmpty ? "浏览站内标签并选择" : "添加或调整标签")
                             .accessibilityIdentifier("search-tag-picker")
@@ -83,6 +89,18 @@ struct SearchView: View {
                     }
                 }.padding(16).background(AppTheme.secondarySurface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
 
+                Button { titleFocused = false; showFilter = true } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "slider.horizontal.3").foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("范围与排序").font(.subheadline.weight(.medium)).foregroundStyle(.primary)
+                            Text(filter.summary).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.leading)
+                        }
+                        Spacer(minLength: 4)
+                        Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+                    }.frame(minHeight: 44).contentShape(Rectangle())
+                }.buttonStyle(.plain).accessibilityIdentifier("search.range")
+
                 if !text.isEmpty && !MediaSearchText.valid(text, mode: .title) {
                     Text(MediaSearchText.validationMessage).font(.caption).foregroundStyle(.secondary)
                 }
@@ -97,15 +115,33 @@ struct SearchView: View {
             }.padding(16)
         }.scrollDismissesKeyboard(.interactively)
             .navigationTitle("组合搜索").navigationBarTitleDisplayMode(.inline).ordinaryAppearance().appNavigationBack()
+            .toolbar {
+                AppToolbarItem(placement: .topBarTrailing) {
+                    Button { titleFocused = false; presetRequest = .init(session: session, scope: .search, filter: filter, criteria: criteria) } label: { Image(systemName: "bookmark") }
+                        .accessibilityLabel("搜索筛选方案").accessibilityIdentifier("search.presets")
+                }
+            }
+            .sheet(isPresented: $showFilter) { FilterView(filter: $filter, context: .creator, showsMediaSelector: true) }
+            .sheet(item: $presetRequest) { request in
+                FilterPresetSheet(request: request) { snapshot in
+                    guard let query = snapshot.criteria else { return }
+                    text = query.text; author = query.author; tags = query.tags; filter = snapshot.filter
+                }
+            }
             .sheet(isPresented: $showTags) { TagDirectoryView(selected: $tags, store: directory).ordinaryAppearance() }
             .sheet(isPresented: $showAuthors) { AuthorSearchPicker(selected: $author).ordinaryAppearance() }
-            .navigationDestination(item: $destination) { SearchWorksView(target: $0) }
+            .navigationDestination(item: $destination) { target in
+                SearchWorksView(target: target, initialFilter: filter) { query, value in
+                    text = query.text; author = query.author; tags = query.tags; filter = value
+                }
+            }
     }
-    private func search() { if criteria.valid { destination = .combined(criteria) } }
+    private func search() { if criteria.valid { titleFocused = false; destination = .combined(criteria) } }
 }
 
 struct SearchWorksView: View {
-    let target: MediaSearchTarget
+    @State private var target: MediaSearchTarget
+    private let onQueryChange: ((MediaSearchCriteria, FeedFilter) -> Void)?
     @EnvironmentObject private var session: SiteSession
     @ObservedObject private var blocklist = TagBlocklist.shared
     @ObservedObject private var authorBlocks = AuthorBlocklist.shared
@@ -115,6 +151,12 @@ struct SearchWorksView: View {
     @State private var focused: Int?
     @State private var viewer: MediaItem?
     @State private var showFilter = false
+    @State private var presetRequest: FilterPresetRequest?
+    init(target: MediaSearchTarget, initialFilter: FeedFilter = .init(kind: .all, sort: "Newest", period: "AllTime"),
+         onQueryChange: ((MediaSearchCriteria, FeedFilter) -> Void)? = nil) {
+        _target = State(initialValue: target); _filter = State(initialValue: initialFilter)
+        self.onQueryChange = onQueryChange
+    }
     private var requestKey: FeedStoreRequestKey { .init(identity: session.feedIdentity, filter: filter, source: .search(target)) }
     var body: some View {
         VStack(spacing: 0) {
@@ -136,7 +178,20 @@ struct SearchWorksView: View {
                       resetFilter: { filter = .defaults(for: .creator, kind: filter.kind) }, adjustFilter: { showFilter = true },
                       isVisible: viewer == nil, refreshFromStart: refreshFeed) { item in focused = item.id; viewer = item } loadMore: { await feed.next(session: session) }
         }.navigationTitle(target.title).navigationBarTitleDisplayMode(.inline).ordinaryAppearance().appNavigationBack()
+            .toolbar {
+                AppToolbarItem(placement: .topBarTrailing) {
+                    Button { presetRequest = .init(session: session, scope: .search, filter: filter, criteria: target.criteria) } label: { Image(systemName: "bookmark") }
+                        .accessibilityLabel("搜索筛选方案").accessibilityIdentifier("search-results.presets")
+                }
+            }
+            .sheet(item: $presetRequest) { request in
+                FilterPresetSheet(request: request) { snapshot in
+                    guard let criteria = snapshot.criteria else { return }
+                    target = .combined(criteria); filter = snapshot.filter
+                }
+            }
             .sheet(isPresented: $showFilter) { FilterView(filter: $filter, context: .creator).ordinaryAppearance() }
+            .onChange(of: requestKey) { _, _ in onQueryChange?(target.criteria, filter) }
             .task(id: requestKey) {
                 let retainedKey = feed.requestKey == requestKey
                 let commit = await feed.activate(session: session, filter: filter, source: .search(target), blockedTags: blocklist.names)

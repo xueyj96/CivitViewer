@@ -15,6 +15,7 @@ struct CachedImageResource {
 struct MediaPreloadStatus: Equatable {
     var ready = 0, total = 0, target = 0, running = 0, failed = 0
     var networkPaused = 0, oversized = 0, spaceLimited = 0, networkFailed = 0
+    var playbackDeferred = 0
     var paused = false
     var summary: String {
         guard target > 0 else { return "暂无预载任务" }
@@ -23,6 +24,7 @@ struct MediaPreloadStatus: Equatable {
     var detail: String {
         var parts: [String] = []
         if total < target { parts.append("当前列表仅有 \(total) 条后续作品") }
+        if playbackDeferred > 0 { parts.append("当前视频优先缓冲，随后继续预载") }
         if networkPaused > 0 { parts.append("\(networkPaused) 条等待允许的网络") }
         if oversized > 0 { parts.append("\(oversized) 条超过单条预取上限") }
         if spaceLimited > 0 { parts.append("\(spaceLimited) 条空间或缓存写入受限") }
@@ -64,6 +66,30 @@ enum PosterDiagnosticPolicy {
 /// are excluded from backups, bounded, and removable from native settings.
 @MainActor
 final class MediaCache: ObservableObject {
+    struct ForegroundVideoDemand: Equatable {
+        var urls = Set<URL>()
+        var waiting = false
+    }
+    private struct PlaybackOwner { let url: URL; let waiting: Bool }
+    private var playbackOwners: [UUID: PlaybackOwner] = [:]
+    private let playbackDemand = CurrentValueSubject<ForegroundVideoDemand, Never>(.init())
+    var foregroundVideoDemands: AnyPublisher<ForegroundVideoDemand, Never> { playbackDemand.eraseToAnyPublisher() }
+
+    /// In-memory demand only: foreground streaming owns its transfer. The
+    /// preloader yields while its first frame/rebuffer is pending.
+    func setForegroundVideoDemand(url: URL, owner: UUID, waiting: Bool) {
+        guard !url.isFileURL else { removeForegroundVideoDemand(owner: owner); return }
+        playbackOwners[owner] = .init(url: url, waiting: waiting)
+        publishPlaybackDemand()
+    }
+    func removeForegroundVideoDemand(owner: UUID) {
+        guard playbackOwners.removeValue(forKey: owner) != nil else { return }
+        publishPlaybackDemand()
+    }
+    private func publishPlaybackDemand() {
+        let value = ForegroundVideoDemand(urls: Set(playbackOwners.values.map(\.url)), waiting: playbackOwners.values.contains { $0.waiting })
+        if value != playbackDemand.value { playbackDemand.send(value) }
+    }
     static let shared = MediaCache()
     static let imageDownloadMaximum: Int64 = 64 * 1024 * 1024
     @Published private(set) var diskBytes: Int64 = 0

@@ -32,6 +32,8 @@ struct TimelineLane: View {
     @StateObject private var model: TimelineModel
     @State private var showFilter = false
     @State private var filterChromeScope = UUID()
+    @State private var presetRequest: FilterPresetRequest?
+    @State private var presetChromeScope = UUID()
     @State private var creator: CreatorRoute?
     @State private var navigationVisible = true
     @State private var kindDrag = 0.0
@@ -113,7 +115,7 @@ struct TimelineLane: View {
     }
     #endif
 
-    var body: some View {
+    private var laneCanvas: some View {
         ZStack(alignment: .top) {
             if presentation == .stream && !feed.items.isEmpty { Color.black }
             else { Color(uiColor: .systemBackground) }
@@ -181,7 +183,11 @@ struct TimelineLane: View {
                     .padding(.horizontal, 18).allowsHitTesting(false).transition(.opacity).viewingChromeHidden(chrome.hidden)
             }
             HStack(spacing: 15) {
-                Color.clear.frame(width: 44, height: 44).allowsHitTesting(false).accessibilityHidden(true)
+                Button {
+                    presetRequest = .init(session: session, scope: followed ? .following : .recommendation, filter: filter)
+                } label: { Image(systemName: "bookmark").font(.body).frame(width: 44, height: 44) }
+                    .accessibilityLabel("筛选方案")
+                    .accessibilityIdentifier(isVisible ? "timeline.presets" : "inactive.timeline.presets")
                 Picker("媒体类型", selection: kindBinding) { ForEach(MediaKind.allCases) { Text($0.title).tag($0) } }
                 .pickerStyle(.segmented).frame(maxWidth: 245)
                 .environment(\.colorScheme, floatingHeader ? .dark : ordinaryColorScheme)
@@ -257,10 +263,21 @@ struct TimelineLane: View {
                     .padding(.horizontal, 16).padding(.top, 102).viewingChromeHidden(chrome.hidden)
             }
         }
-        .coordinateSpace(name: gestureSpace)
+    }
+
+    private var presentedLane: some View {
+        laneCanvas.coordinateSpace(name: gestureSpace)
         .onPreferenceChange(TimelineGestureFrameKey.self) { overlayFrames = $0 }
         .clipped().toolbar(.hidden, for: .navigationBar)
         .sheet(isPresented: $showFilter, onDismiss: { chrome.resume(after: filterChromeScope) }) { FilterView(filter: filterBinding, context: followed ? .following : .discovery).presentationDetents([.medium, .large]) }
+        .sheet(item: $presetRequest, onDismiss: { chrome.resume(after: presetChromeScope) }) { request in
+            FilterPresetSheet(request: request) { snapshot in model.selectFilter(snapshot.filter) }
+                .presentationDetents([.medium, .large])
+        }
+        .onChange(of: presetRequest?.id) { _, value in
+            if value != nil { chrome.suspend(for: presetChromeScope) }
+            else { chrome.resume(after: presetChromeScope) }
+        }
         .onChange(of: showFilter) { _, shown in
             if shown { chrome.suspend(for: filterChromeScope) }
             else { chrome.resume(after: filterChromeScope) }
@@ -279,7 +296,10 @@ struct TimelineLane: View {
             }
         }
         .navigationDestination(item: $creator) { CreatorView(creator: $0.creator, initialKind: $0.kind) }
-        .onChange(of: presentation) { _, layout in
+    }
+
+    var body: some View {
+        presentedLane.onChange(of: presentation) { _, layout in
             if layout == .grid { gridAnchor = model.focused }
         }
         .onChange(of: gridAnchor) { _, id in
@@ -334,6 +354,7 @@ struct TimelineLane: View {
         .onDisappear {
             cancelContinuationAction()
             chrome.resume(after: filterChromeScope)
+            chrome.resume(after: presetChromeScope)
             navigationVisible = false; model.setVisible(isVisible && gridViewer != nil)
             #if DEBUG && targetEnvironment(simulator)
             qaController?.visibilityChanged(isVisible && gridViewer != nil)

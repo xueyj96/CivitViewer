@@ -12,16 +12,16 @@ struct FilterView: View {
             Form {
                 if showsMediaSelector {
                     Section("默认媒体") {
-                        Picker("默认媒体", selection: Binding(get: { filter.effectiveKind }, set: { filter = filter.selecting(kind: $0) })) { ForEach(allowAll ? MediaKind.allCases : [.image, .video]) { Text($0.title).tag($0) } }.pickerStyle(.segmented)
+                        Picker("默认媒体", selection: Binding(get: { filter.effectiveKind }, set: { filter = filter.selecting(kind: $0) })) { ForEach(allowAll ? MediaKind.allCases : [.image, .video]) { Text($0.title).tag($0) } }.pickerStyle(.segmented).accessibilityIdentifier("filter.media-kind")
                     }
                 }
                 Section("排序与范围") {
                     Picker("排序", selection: $filter.sort) {
                         ForEach(FeedSort.allCases) { Text($0.title).tag($0.rawValue) }
-                    }
+                    }.accessibilityIdentifier("filter.sort")
                     Picker("时间范围", selection: $filter.period) {
                         ForEach(FeedPeriod.allCases) { Text($0.title).tag($0.rawValue) }
-                    }
+                    }.accessibilityIdentifier("filter.period")
                 }
                 Section("内容范围") {
                     Picker("基础模型", selection: $filter.baseModel) {

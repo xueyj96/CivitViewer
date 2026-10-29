@@ -8,6 +8,127 @@ final class ResumePromptUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    private func presetRow59(_ name: String) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "preset.library.apply.", name)).firstMatch
+    }
+    private func savePreset59(_ name: String) {
+        let save = app.buttons["preset.library.save"]
+        XCTAssertTrue(save.waitForExistence(timeout: 5)); XCTAssertTrue(save.isEnabled); save.tap()
+        let field = app.textFields["preset.name.input"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.tap(); field.press(forDuration: 1.1)
+        let all = app.descendants(matching: .any).matching(NSPredicate(format: "label IN %@", ["Select All", "全选"])).firstMatch
+        if !all.waitForExistence(timeout: 3) {
+            print("PRESETS60_SELECTION_MENU \(app.debugDescription)")
+            attachScreenshot(named: "presets60-name-selection-menu")
+        }
+        XCTAssertTrue(all.exists); all.tap(); field.typeText(name)
+        XCTAssertEqual(field.value as? String, name)
+        attachScreenshot(named: "presets59-name-and-readonly-preview")
+        app.buttons["preset.name.save"].tap()
+        XCTAssertTrue(presetRow59(name).waitForExistence(timeout: 6))
+    }
+
+    func testPresets59TimelineSaveApplyScopeIsolationAndPlayback() {
+        visualLaunch(width: 320, large: false, landscape: false, extra: ["-muted", "YES", "--qa-continuous59"])
+        app.segmentedControls["timeline.media-kind"].buttons["视频"].tap()
+        waitPlayingFixture()
+        let name = "Video-" + String(UUID().uuidString.prefix(6))
+        app.buttons["timeline.presets"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["preset.library"].waitForExistence(timeout: 5))
+        savePreset59(name)
+        XCTAssertTrue(presetRow59(name).valueDescription.contains("当前筛选"))
+        attachScreenshot(named: "presets59-timeline-compact-list")
+        app.buttons["preset.library.done"].tap()
+        app.segmentedControls["timeline.media-kind"].buttons["图片"].tap()
+        app.buttons["timeline.presets"].tap()
+        XCTAssertTrue(presetRow59(name).waitForExistence(timeout: 5))
+        XCTAssertFalse(presetRow59(name).valueDescription.contains("当前筛选"))
+        presetRow59(name).tap()
+        XCTAssertTrue(app.segmentedControls["timeline.media-kind"].buttons["视频"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.segmentedControls["timeline.media-kind"].buttons["视频"].isSelected)
+        waitPlayingFixture()
+        app.buttons["timeline.source.following"].tap()
+        app.buttons["timeline.presets"].tap()
+        XCTAssertTrue(app.navigationBars["筛选方案 · 关注"].waitForExistence(timeout: 5))
+        XCTAssertFalse(presetRow59(name).exists, "Recommendation presets must not appear in following")
+        attachScreenshot(named: "presets59-following-scope-isolated")
+        app.buttons["preset.library.done"].tap()
+        app.buttons["timeline.source.recommendation"].tap()
+        waitPlayingFixture()
+        attachScreenshot(named: "presets59-playback-resumes-after-apply")
+    }
+
+    func testPresets59SearchRestoresTagsTextAndRangeWithoutAutoSearch() {
+        app = XCUIApplication()
+        app.launchArguments = ["--qa-collection-paging", "--qa-theme-ui", "--qa-style48", "-muted", "YES", "-app.appearance", "dark"]
+        app.launch(); mainTabButton("搜索").tap()
+        let title = app.textFields["search-title-input"]
+        XCTAssertTrue(title.waitForExistence(timeout: 6)); title.tap(); title.typeText("City")
+        app.buttons["search-tag-picker"].tap()
+        let portrait = app.buttons["tag-directory.tag.42001"], night = app.buttons["tag-directory.tag.42002"]
+        XCTAssertTrue(portrait.waitForExistence(timeout: 6)); portrait.tap(); night.tap(); app.buttons["完成"].tap()
+        let range = app.buttons["search.range"]
+        for _ in 0..<3 where !range.isHittable { app.swipeUp() }
+        if !range.isHittable {
+            print("PRESETS59_SEARCH_RANGE_UNREACHABLE \(app.debugDescription)")
+            attachScreenshot(named: "presets59-search-range-unreachable")
+        }
+        XCTAssertTrue(range.isHittable); range.tap()
+        app.segmentedControls["filter.media-kind"].buttons["视频"].tap()
+        app.buttons["filter.period"].tap(); app.buttons["本月"].tap()
+        app.buttons["filter.sort"].tap(); app.buttons["热度"].tap()
+        attachScreenshot(named: "presets59-search-range-before-save")
+        app.buttons["完成"].tap()
+        app.buttons["search.presets"].tap()
+        let name = "Night-" + String(UUID().uuidString.prefix(6)); savePreset59(name)
+        app.buttons["preset.library.done"].tap()
+        let clear = app.buttons["清空全部条件"]
+        if !clear.isHittable { app.swipeDown() }; XCTAssertTrue(clear.isHittable); clear.tap()
+        app.buttons["search.presets"].tap(); XCTAssertTrue(presetRow59(name).waitForExistence(timeout: 5)); presetRow59(name).tap()
+        XCTAssertEqual(title.value as? String, "City")
+        XCTAssertTrue(app.buttons["移除搜索标签 portrait"].exists); XCTAssertTrue(app.buttons["移除搜索标签 night"].exists)
+        XCTAssertTrue(range.label.contains("视频") && range.label.contains("本月") && range.label.contains("热度"))
+        XCTAssertFalse(app.navigationBars["搜索结果"].exists, "Loading a saved search must leave explicit search under user control")
+        attachScreenshot(named: "presets59-search-complete-conditions-restored")
+        let submit = app.buttons["search-submit"]
+        if !submit.isHittable { app.swipeUp() }; XCTAssertTrue(submit.isEnabled); submit.tap()
+        XCTAssertTrue(app.navigationBars["搜索结果"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.buttons["search-results.presets"].exists)
+        attachScreenshot(named: "presets59-search-results-with-saved-range")
+    }
+
+    func testPresets60CompactEditorRenameAndCancel() {
+        visualLaunch(width: 320, large: true, landscape: false, extra: ["-muted", "YES"])
+        app.buttons["timeline.presets"].tap()
+        let save = app.buttons["preset.library.save"]
+        XCTAssertTrue(save.waitForExistence(timeout: 5)); XCTAssertTrue(save.isHittable)
+        attachScreenshot(named: "presets60-large-type-library-bottom-action")
+        let name = "Compact-" + String(UUID().uuidString.prefix(5))
+        savePreset59(name)
+        presetRow59(name).press(forDuration: 1)
+        app.buttons["重命名"].tap()
+        let field = app.textFields["preset.name.input"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        XCTAssertEqual(field.value as? String, name)
+        field.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+        field.typeText("-R")
+        let renamed = name + "-R"
+        XCTAssertEqual(field.value as? String, renamed)
+        let commit = app.buttons["preset.name.save"]
+        XCTAssertTrue(commit.isHittable); XCTAssertTrue(commit.isEnabled)
+        attachScreenshot(named: "presets60-compact-rename-structured-conditions")
+        commit.tap()
+        XCTAssertTrue(presetRow59(renamed).waitForExistence(timeout: 5))
+        app.buttons["preset.library.save"].tap()
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        app.buttons["navigation.back"].tap()
+        XCTAssertTrue(presetRow59(renamed).waitForExistence(timeout: 5))
+        XCTAssertFalse(field.exists, "Cancel/back pops to the same library without saving an unnamed plan")
+        app.buttons["preset.library.done"].tap()
+        XCTAssertTrue(app.buttons["timeline.presets"].waitForExistence(timeout: 5))
+    }
+
     func testGrid55RetryStaysWithErrorAndDoesNotOpenWork() {
         app = XCUIApplication()
         app.launchArguments = ["--qa-grid-retry55", "-muted", "YES"]
