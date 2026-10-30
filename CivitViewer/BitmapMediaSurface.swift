@@ -143,6 +143,8 @@ struct CachedPoster: View {
     var diagnosticWorkID: Int? = nil
     var onFailure: ((Bool) -> Void)? = nil
     var showsFailure = true
+    var emptyPlaceholder: String? = nil
+    var imageBlur: CGFloat = 0
     @State private var image: UIImage?
     @State private var failed = false
     @State private var cacheRevision = 0
@@ -153,6 +155,10 @@ struct CachedPoster: View {
                 if let image {
                     Image(uiImage: image).resizable().aspectRatio(contentMode: fit ? .fit : .fill)
                         .frame(width: geometry.size.width, height: geometry.size.height).clipped()
+                        .blur(radius: imageBlur)
+                } else if let emptyPlaceholder {
+                    Text(emptyPlaceholder).font(.subheadline).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if failed {
                     if showsFailure {
                         Image(systemName: "play.rectangle").font(.title).foregroundStyle(.secondary)

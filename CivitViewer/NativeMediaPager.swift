@@ -17,6 +17,7 @@ struct NativeMediaPager: View {
     var onUserBoundaryDemand: ((Int) -> Void)? = nil
     var boundaryWaiting = false
     var onUserBoundaryCancel: (() -> Void)? = nil
+    var onBoundaryDrag: ((CGFloat, MediaPanPhase) -> Void)? = nil
     var onPageDisplayed: ((Int) -> Void)? = nil
     let renderPage: (Int, Bool) -> AnyView
     #if DEBUG && targetEnvironment(simulator)
@@ -27,14 +28,14 @@ struct NativeMediaPager: View {
         #if DEBUG && targetEnvironment(simulator)
         NativeMediaPagerController(ids: ids, focused: $focused, initialID: initialID, focusRequest: focusRequest,
             queueRevision: queueRevision, viewport: viewport, accessibilityIdentifier: accessibilityIdentifier,
-            isVisible: isVisible, onUserPageSettled: onUserPageSettled, onUserContinuationDemand: onUserContinuationDemand, onUserBoundaryDemand: onUserBoundaryDemand, boundaryWaiting: boundaryWaiting, onUserBoundaryCancel: onUserBoundaryCancel, onPageDisplayed: onPageDisplayed, renderPage: renderPage, frames: frames)
+            isVisible: isVisible, onUserPageSettled: onUserPageSettled, onUserContinuationDemand: onUserContinuationDemand, onUserBoundaryDemand: onUserBoundaryDemand, boundaryWaiting: boundaryWaiting, onUserBoundaryCancel: onUserBoundaryCancel, onBoundaryDrag: onBoundaryDrag, onPageDisplayed: onPageDisplayed, renderPage: renderPage, frames: frames)
             .preference(key: CollectionPagingQAFrameKey.self, value: frames.collection)
             .preference(key: ResumePromptQAFrameKey.self, value: frames.resume)
             .preference(key: PlaybackLayoutQAFrameKey.self, value: frames.playback)
         #else
         NativeMediaPagerController(ids: ids, focused: $focused, initialID: initialID, focusRequest: focusRequest,
             queueRevision: queueRevision, viewport: viewport, accessibilityIdentifier: accessibilityIdentifier,
-            isVisible: isVisible, onUserPageSettled: onUserPageSettled, onUserContinuationDemand: onUserContinuationDemand, onUserBoundaryDemand: onUserBoundaryDemand, boundaryWaiting: boundaryWaiting, onUserBoundaryCancel: onUserBoundaryCancel, onPageDisplayed: onPageDisplayed, renderPage: renderPage)
+            isVisible: isVisible, onUserPageSettled: onUserPageSettled, onUserContinuationDemand: onUserContinuationDemand, onUserBoundaryDemand: onUserBoundaryDemand, boundaryWaiting: boundaryWaiting, onUserBoundaryCancel: onUserBoundaryCancel, onBoundaryDrag: onBoundaryDrag, onPageDisplayed: onPageDisplayed, renderPage: renderPage)
         #endif
     }
 }
@@ -53,6 +54,7 @@ private struct NativeMediaPagerController: UIViewControllerRepresentable {
     var onUserBoundaryDemand: ((Int) -> Void)? = nil
     var boundaryWaiting = false
     var onUserBoundaryCancel: (() -> Void)? = nil
+    var onBoundaryDrag: ((CGFloat, MediaPanPhase) -> Void)? = nil
     var onPageDisplayed: ((Int) -> Void)? = nil
     let renderPage: (Int, Bool) -> AnyView
     #if DEBUG && targetEnvironment(simulator)
@@ -98,6 +100,7 @@ private struct NativeMediaPagerController: UIViewControllerRepresentable {
         private var activeAccessibilityIdentifier = ""
         private weak var observedBoundaryPan: UIPanGestureRecognizer?
         private var boundaryGate: UIPanGestureRecognizer?
+        private var boundaryVisualOffset: CGFloat = 0
         #if DEBUG && targetEnvironment(simulator)
         private let debugInstanceID = UUID().uuidString
         private var debugLastState: Data?
@@ -399,10 +402,14 @@ private struct NativeMediaPagerController: UIViewControllerRepresentable {
                             "transitionActive": self.transition != nil,
                             "pendingFocused": self.pending?.focused as Any? ?? NSNull(),
                             "latestBoundaryWaiting": (self.pending ?? self.configuration).boundaryWaiting,
+                            "boundaryVisualOffset": Double(self.boundaryVisualOffset),
                             "boundaryGateActive": self.boundaryGate?.state == .began || self.boundaryGate?.state == .changed]
                         if let view = self.controller?.viewControllers?.first?.viewIfLoaded, let container = self.container {
                             let rect = view.convert(view.bounds, to: container.view)
                             value["displayedRelativeFrame"] = ["x": Double(rect.minX), "y": Double(rect.minY), "width": Double(rect.width), "height": Double(rect.height)]
+                        }
+                        if let id = self.currentID, let frame = self.configuration.frames.collection["page-\(id)"] {
+                            value["renderedPageWindowFrame"] = self.debugRect(frame)
                         }
                         return value
                     }
@@ -417,7 +424,7 @@ private struct NativeMediaPagerController: UIViewControllerRepresentable {
             guard recognizer === boundaryGate, let pan = recognizer as? UIPanGestureRecognizer else { return false }
             let velocity = pan.velocity(in: pan.view)
             return isVisible && transition == nil && currentID != nil && currentID == ids.last &&
-                (velocity.y < 0 || (configuration.boundaryWaiting && velocity.y > 0)) &&
+                (velocity.y < 0 || ((pending ?? configuration).boundaryWaiting && velocity.y > 0)) &&
                 abs(velocity.y) > abs(velocity.x)
         }
 
@@ -433,12 +440,33 @@ private struct NativeMediaPagerController: UIViewControllerRepresentable {
         }
 
         @objc private func boundaryGateEnded(_ pan: UIPanGestureRecognizer) {
+            guard pan === boundaryGate else { return }
+            switch pan.state {
+            case .began, .changed:
+                let value = pending ?? configuration
+                // Window coordinates remain stable while the canvas follows the
+                // finger. UIKit keeps ownership of its internal scroll offset.
+                let delta = pan.translation(in: pan.view?.window).y
+                if value.boundaryWaiting, delta > 0 {
+                    boundaryVisualOffset = min(delta, value.viewport.height)
+                } else if delta < 0 {
+                    let distance = -delta
+                    boundaryVisualOffset = -48 * distance / (distance + 120)
+                } else { boundaryVisualOffset = 0 }
+                value.onBoundaryDrag?(boundaryVisualOffset, pan.state == .began ? .began : .changed)
+            case .ended:
+                requestBoundaryContinuation(pan)
+                boundaryVisualOffset = 0
+                (pending ?? configuration).onBoundaryDrag?(0, .ended)
+            case .cancelled, .failed:
+                boundaryVisualOffset = 0
+                (pending ?? configuration).onBoundaryDrag?(0, .cancelled)
+            default: break
+            }
             #if DEBUG && targetEnvironment(simulator)
             touchTrace?.record("native.boundaryGate", ["state": pan.state.rawValue],
                 sampleKey: pan.state == .changed ? "native.boundaryGate.changed" : nil)
             #endif
-            guard pan === boundaryGate, pan.state == .ended else { return }
-            requestBoundaryContinuation(pan)
         }
 
         /// A real upward swipe at the last page is demand, even when there is no
@@ -454,14 +482,23 @@ private struct NativeMediaPagerController: UIViewControllerRepresentable {
         private func requestBoundaryContinuation(_ pan: UIPanGestureRecognizer) {
             guard isVisible, transition == nil,
                   let currentID, currentID == ids.last else { return }
-            let delta = pan.translation(in: pan.view)
-            if configuration.boundaryWaiting, delta.y > 36, abs(delta.y) > abs(delta.x) * 1.2 {
-                configuration.onUserBoundaryCancel?()
+            let delta = pan.translation(in: pan.view?.window)
+            let latest = pending ?? configuration
+            if latest.boundaryWaiting {
+                if delta.y > 36, abs(delta.y) > abs(delta.x) * 1.2 {
+                    // A reverse gesture wins over a result which arrived while
+                    // the finger was held. Drop that deferred focus, not its data.
+                    cancelPendingApply()
+                    pending = nil
+                    latest.onUserBoundaryCancel?()
+                }
+                // More forward input on the waiting page is resistance only;
+                // it must not restart a request or discard an arriving target.
                 return
             }
             guard delta.y < -36, abs(delta.y) > abs(delta.x) * 1.2 else { return }
-            configuration.onUserBoundaryDemand?(currentID)
-            configuration.onUserContinuationDemand?(currentID)
+            latest.onUserBoundaryDemand?(currentID)
+            latest.onUserContinuationDemand?(currentID)
         }
 
         func layoutChanged() {

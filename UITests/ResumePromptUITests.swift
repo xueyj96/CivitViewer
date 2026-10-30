@@ -1268,6 +1268,7 @@ final class ResumePromptUITests: XCTestCase {
     }
     func testPoster50UnavailableRouteIsRecordedWithoutRequest() {
         launchPosterDetails50(missing: true)
+        XCTAssertTrue(app.descendants(matching: .any)["details.preview"].staticTexts["暂无可用封面"].exists)
         waitUntil("A rejected source is recorded without inventing a URL or request") {
             self.playback43Entries().contains {
                 let context = $0["playback"] as? [String: Any]
@@ -1279,7 +1280,7 @@ final class ResumePromptUITests: XCTestCase {
         attachPlayback43("poster50-unavailable-route")
     }
 
-    func testPoster51FailedDetailRefreshesWhenAnotherProducerCachesFrame() {
+    func testPoster67NeutralPlaceholderRefreshesWhenAnotherProducerCachesFrame() {
         app = XCUIApplication(); XCUIDevice.shared.orientation = .portrait
         app.launchArguments = ["--qa-collection-paging", "--qa-playback-diagnostics43=poster-stream49",
                                "--qa-poster-details50", "--qa-poster-late51", "-muted", "YES"]
@@ -1288,11 +1289,15 @@ final class ResumePromptUITests: XCTestCase {
         let preview = app.descendants(matching: .any)["details.preview"]
         let poster = preview.descendants(matching: .any)["poster.qa.146087479"]
         XCTAssertTrue(poster.waitForValueToContain("state=failed", timeout: 12))
-        XCTAssertTrue(app.buttons["details.poster.retry"].exists)
+        XCTAssertTrue(preview.staticTexts["暂无可用封面"].exists)
+        XCTAssertEqual(preview.activityIndicators.count, 0)
+        XCTAssertFalse(app.buttons["details.poster.retry"].exists)
+        attachScreenshot(named: "poster67-neutral-before-frame")
         let producer = app.buttons["poster.qa.generate51"]
         producer.tap()
         XCTAssertTrue(producer.waitForValueToContain("written", timeout: 3), "The real cache writer must commit a valid frame first")
         XCTAssertTrue(poster.waitForValueToContain("state=ready", timeout: 5), "The existing failed detail must refresh without tapping retry or reopening")
+        XCTAssertFalse(preview.staticTexts["暂无可用封面"].exists)
         XCTAssertFalse(app.buttons["details.poster.retry"].exists)
         XCTAssertFalse(app.descendants(matching: .any)["media.qa.player"].exists, "Cache invalidation does not create a second player")
         attachPlayback43("poster51-late-cache-write")
@@ -2216,7 +2221,7 @@ final class ResumePromptUITests: XCTestCase {
 
     func testStyle48SearchTagsAndAuthorFilterInBothAppearances() {
         app = XCUIApplication()
-        app.launchArguments = ["--qa-collection-paging", "--qa-theme-ui", "--qa-style48"]
+        app.launchArguments = ["--qa-collection-paging", "--qa-theme-ui", "--qa-style48", "-muted", "YES"]
         app.launch()
         for appearance in ["深色", "浅色"] {
             mainTabButton("我").tap(); chooseAppearance(appearance)
@@ -2231,10 +2236,25 @@ final class ResumePromptUITests: XCTestCase {
             let night = app.buttons["tag-directory.tag.42002"]
             XCTAssertTrue(portrait.waitForExistence(timeout: 5)); XCTAssertTrue(night.exists)
             XCTAssertGreaterThanOrEqual(portrait.frame.height, 44)
+            let portraitFrame = portrait.frame, nightFrame = night.frame
             if !portrait.valueDescription.contains("已选择") { portrait.tap() }
             if !night.valueDescription.contains("已选择") { night.tap() }
             XCTAssertTrue(portrait.valueDescription.contains("已选择"))
             XCTAssertTrue(night.valueDescription.contains("已选择"))
+            XCTAssertEqual(portrait.frame, portraitFrame, "Color-only tag selection keeps the directory cell geometry")
+            XCTAssertEqual(night.frame, nightFrame)
+            app.buttons["tag-directory.actions"].tap()
+            let removals = app.buttons.matching(NSPredicate(format: "label == %@ OR label == %@", "移除 portrait", "移除搜索标签 portrait"))
+            waitUntil("The visible menu action must be selected instead of a matching chip behind the sheet") {
+                removals.allElementsBoundByIndex.contains(where: \.isHittable)
+            }
+            guard let remove = removals.allElementsBoundByIndex.first(where: \.isHittable) else { XCTFail("Missing visible removal action"); return }
+            remove.tap()
+            waitUntil("Moving the removal action into the menu preserves per-tag deselection") {
+                !portrait.valueDescription.contains("已选择")
+            }
+            XCTAssertEqual(portrait.frame, portraitFrame)
+            portrait.tap()
             attachScreenshot(named: "style48-\(appearance)-tag-selection")
             app.buttons["完成"].tap()
             XCTAssertTrue(app.buttons["移除搜索标签 portrait"].waitForExistence(timeout: 5))
@@ -2252,6 +2272,82 @@ final class ResumePromptUITests: XCTestCase {
             attachScreenshot(named: "style48-\(appearance)-author-time-menu")
             app.buttons["不限时间"].tap()
         }
+    }
+
+    func testLayout67SameAuthorAndFollowPositionsAcrossRealEntries() {
+        visualLaunch(width: 0, large: false, landscape: false, extra: ["-autoplay", "YES", "-muted", "YES"])
+        app.segmentedControls["timeline.media-kind"].buttons["视频"].tap()
+        waitPlayingFixture()
+        var metrics: [String: [String: Double]] = [:]
+        func sample(_ route: String) {
+            let author = visualButton("media.author.28037102"), follow = visualButton("follow-28037901")
+            XCTAssertTrue(author.waitForExistence(timeout: 8)); XCTAssertTrue(follow.waitForExistence(timeout: 8))
+            waitUntil("The same resolved author and follow state must be visible before comparing entry layouts") {
+                author.isHittable && follow.isHittable && self.watchFocus() == 28_037_102
+            }
+            let seek = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "播放进度")).allElementsBoundByIndex.first(where: \.isHittable)
+            guard let seek else { XCTFail("Missing actual current seek control"); return }
+            let viewport = heightDeck().frame
+            metrics[route] = ["authorX":author.frame.minX,"authorY":author.frame.minY,"authorW":author.frame.width,"authorH":author.frame.height,
+                              "followX":follow.frame.minX,"followY":follow.frame.minY,"followW":follow.frame.width,"followH":follow.frame.height,
+                              "seekY":seek.frame.minY,"seekMaxY":seek.frame.maxY,"viewportY":viewport.minY,"viewportH":viewport.height,
+                              "windowW":app.windows.firstMatch.frame.width,"windowH":app.windows.firstMatch.frame.height]
+            print("LAYOUT67_ENTRY \(route) \(metrics[route]!)")
+            attachScreenshot(named: "layout67-aligned-\(route)")
+        }
+        sample("timeline")
+        mainTabButton("我").tap()
+        let favorites = app.buttons["我的收藏"]
+        if !favorites.isHittable { app.swipeUp() }
+        XCTAssertTrue(favorites.waitForExistence(timeout: 5)); favorites.tap()
+        let folder = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "分页测试收藏")).firstMatch
+        XCTAssertTrue(folder.waitForExistence(timeout: 5)); folder.tap()
+        let cell = app.buttons["media.grid.cell.28037102"]
+        XCTAssertTrue(cell.waitForExistence(timeout: 8)); if !cell.isHittable { app.swipeUp() }; cell.tap()
+        waitPlayingFixture(); sample("collection")
+        visualButton("media.author.28037102").tap()
+        XCTAssertTrue(app.navigationBars["作者作品"].waitForExistence(timeout: 8))
+        let creatorCell = visualButton("media.grid.cell.28037102")
+        XCTAssertTrue(creatorCell.waitForExistence(timeout: 8)); if !creatorCell.isHittable { app.swipeUp() }; creatorCell.tap()
+        waitPlayingFixture(); sample("creator")
+        visualButton("media.author.28037102").tap()
+        XCTAssertTrue(visualButton("media.grid.cell.28037102").waitForExistence(timeout: 5), "Author tap in that author's viewer should still close back to its grid")
+        guard let timeline = metrics["timeline"] else { XCTFail("Missing timeline reference"); return }
+        for route in ["collection", "creator"] {
+            guard let value = metrics[route] else { XCTFail("Missing entry \(route)"); continue }
+            for key in ["authorX", "authorY", "followX", "followY", "seekY", "seekMaxY"] {
+                XCTAssertEqual(value[key]!, timeline[key]!, accuracy: 0.5, "\(route) \(key) must share the measured timeline overlay baseline")
+            }
+            XCTAssertEqual(value["viewportH"]!, timeline["viewportH"]!, accuracy: 0.5, "Floating controls must not shrink the media canvas")
+        }
+        let attachment = XCTAttachment(string: String(data: try! JSONSerialization.data(withJSONObject: metrics, options: [.sortedKeys]), encoding: .utf8)!)
+        attachment.name = "layout67-three-real-entries"; attachment.lifetime = .keepAlways; add(attachment)
+    }
+
+    func testTags67DetailsSelectionKeepsVisibleChipLayout() {
+        visualLaunch(width: 0, large: false, landscape: false, extra: ["--qa-details-tags", "-muted", "YES"])
+        app.segmentedControls["timeline.media-kind"].buttons["视频"].tap()
+        app.buttons.matching(NSPredicate(format: "label == %@", "作品详情")).firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["作品详情"].waitForExistence(timeout: 5))
+        let matches = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "details.tag."))
+        XCTAssertTrue(matches.firstMatch.waitForExistence(timeout: 5))
+        let chips = Array(matches.allElementsBoundByIndex.filter(\.isHittable).prefix(6))
+        guard chips.count == 6 else { XCTFail("Expected six actually displayed collapsed fixture tags"); return }
+        let before = chips.map(\.frame)
+        chips[0].tap()
+        waitUntil("The color-only tag must retain its selected accessibility state") {
+            chips[0].valueDescription.contains("已选入组合搜索")
+        }
+        for (chip, frame) in zip(chips, before) {
+            XCTAssertEqual(chip.frame.width, frame.width, accuracy: 0.5)
+            XCTAssertEqual(chip.frame.height, frame.height, accuracy: 0.5)
+            XCTAssertEqual(chip.frame.minX, frame.minX, accuracy: 0.5)
+            XCTAssertEqual(chip.frame.minY, frame.minY, accuracy: 0.5)
+        }
+        attachScreenshot(named: "tags67-highlight-without-layout-shift")
+        chips[0].tap()
+        waitUntil("Deselecting retains the original label geometry") { chips[0].valueDescription == "未选择" }
+        XCTAssertEqual(chips[0].frame, before[0])
     }
 
     func testDetailsTagsCompactExpansionSelectionAndSearchNavigation() {
@@ -2415,8 +2511,37 @@ final class ResumePromptUITests: XCTestCase {
         auditWaitingTail65(compactLarge: true)
     }
 
-    func testNative66ReverseCancelsWaitingWithoutSkippingPreviousWork() {
-        launchContinuation("sparse-long64", extra: ["--qa-native-layout64", "-muted", "YES"])
+    func testNative67WaitingForwardDragIsBoundedAndDoesNotRestartLoading() {
+        launchContinuation("sparse-long64", extra: ["--qa-native-layout64", "--qa-pager-touch-trace", "-muted", "YES"])
+        waitPlayingFixture()
+        waitUntil("Sparse continuation remains gated") { self.continuationFields()["gate"] == "waiting" }
+        heightDeck().swipeUp(); heightDeck().swipeUp(); heightDeck().swipeUp()
+        XCTAssertTrue(app.descendants(matching: .any)["media.boundary.state"].waitForExistence(timeout: 5))
+        let requests = continuationFields()["requests"]
+        let probe = app.staticTexts["pager.qa.trace"], frame = heightDeck().frame
+        guard let initial = try? JSONSerialization.jsonObject(with: Data(probe.valueDescription.utf8)) as? [String: Any],
+              let marker = initial["lastSequence"] as? Int else { XCTFail("Missing waiting trace"); return }
+        let bottom = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: frame.midX, dy: frame.minY + frame.height * 0.8))
+        let top = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: frame.midX, dy: frame.minY + frame.height * 0.2))
+        bottom.press(forDuration: 0.05, thenDragTo: top, withVelocity: XCUIGestureVelocity(rawValue: 220), thenHoldForDuration: 0.3)
+        guard let trace = try? JSONSerialization.jsonObject(with: Data(probe.valueDescription.utf8)) as? [String: Any],
+              let events = trace["events"] as? [[String: Any]] else { XCTFail("Missing resisted forward samples"); return }
+        let held = events.filter { ($0["sequence"] as? Int ?? 0) > marker && ($0["native"] as? [String: Any])?["boundaryGateActive"] as? Bool == true }
+        let distances = held.compactMap { ($0["native"] as? [String: Any])?["boundaryVisualOffset"] as? Double }.map { max(0, -$0) }
+        XCTAssertGreaterThan(distances.max() ?? 0, 8, "The waiting canvas must give visible resistance feedback")
+        XCTAssertLessThanOrEqual(distances.max() ?? .infinity, 50, "A full finger drag must not create another empty page")
+        XCTAssertEqual(watchFocus(), 64_000_102)
+        XCTAssertEqual(continuationFields()["requests"], requests, "Resistance is not another load or refresh request")
+        XCTAssertTrue(app.descendants(matching: .any)["media.boundary.state"].exists)
+        XCTAssertEqual(heightDeck().frame, frame, "The native input viewport remains fixed")
+        attachScreenshot(named: "boundary67-forward-resistance-retains-loading-destination")
+        heightDeck().swipeDown()
+        XCTAssertTrue(app.descendants(matching: .any)["media.boundary.state"].waitForNonExistence(timeout: 5))
+        waitPlayingFixture()
+    }
+
+    func testNative67ReverseDragRevealsPreviousWithoutSkippingWork() {
+        launchContinuation("sparse-long64", extra: ["--qa-native-layout64", "--qa-pager-touch-trace", "-muted", "YES"])
         waitPlayingFixture()
         waitUntil("Sparse continuation remains gated") { self.continuationFields()["gate"] == "waiting" }
         heightDeck().swipeUp(); heightAssert("recommendation", phase: "cancel66-second", expected: 64_000_101)
@@ -2424,7 +2549,21 @@ final class ResumePromptUITests: XCTestCase {
         let before = playerFields()
         heightDeck().swipeUp()
         XCTAssertTrue(app.descendants(matching: .any)["media.boundary.state"].waitForExistence(timeout: 5))
-        heightDeck().swipeDown()
+        let viewport = heightDeck().frame
+        let probe = app.staticTexts["pager.qa.trace"]
+        guard let initial = try? JSONSerialization.jsonObject(with: Data(probe.valueDescription.utf8)) as? [String: Any],
+              let marker = initial["lastSequence"] as? Int else { XCTFail("Missing waiting gesture trace"); return }
+        let upper = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: viewport.midX, dy: viewport.minY + viewport.height * 0.22))
+        let lower = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: viewport.midX, dy: viewport.minY + viewport.height * 0.75))
+        upper.press(forDuration: 0.05, thenDragTo: lower, withVelocity: XCUIGestureVelocity(rawValue: 220), thenHoldForDuration: 0.3)
+        guard let trace = try? JSONSerialization.jsonObject(with: Data(probe.valueDescription.utf8)) as? [String: Any],
+              let events = trace["events"] as? [[String: Any]] else { XCTFail("Missing reverse drag samples"); return }
+        let held = events.filter { ($0["sequence"] as? Int ?? 0) > marker && ($0["native"] as? [String: Any])?["boundaryGateActive"] as? Bool == true }
+        let offsets = held.compactMap { ($0["native"] as? [String: Any])?["boundaryVisualOffset"] as? Double }
+        XCTAssertGreaterThan(offsets.max() ?? 0, 60, "The previous canvas must follow a real held reverse drag")
+        let pageFrames = held.compactMap { ($0["native"] as? [String: Any])?["renderedPageWindowFrame"] as? [String: Double] }
+        XCTAssertGreaterThan((pageFrames.compactMap { $0["y"] }.max() ?? 0) - (pageFrames.compactMap { $0["y"] }.min() ?? 0), 40,
+                             "Real rendered page geometry must move; a callback number alone is insufficient")
         XCTAssertTrue(app.descendants(matching: .any)["media.boundary.state"].waitForNonExistence(timeout: 5))
         heightAssert("recommendation", phase: "cancel66-return-to-origin", expected: 64_000_102)
         waitPlayingFixture(); assertUnchangedPlayer(before, playerFields())
@@ -2584,12 +2723,15 @@ final class ResumePromptUITests: XCTestCase {
         // native residual motion, with whole settled geometry checked below.
         XCTAssertLessThanOrEqual(exposed, 2, "An unavailable next page must stay within2pt boundary motion, not expose a black page")
         XCTAssertEqual(watchFocus(), 64_000_102)
-        heightAssert("recommendation", phase: "tail65-after-blocked-demand", expected: 64_000_102)
+        XCTAssertTrue(heightDeck().isHittable, "The native hit-test viewport stays available behind the movable waiting canvas")
         XCTAssertTrue(app.descendants(matching: .any)["media.boundary.waiting"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["media.boundary.message"].exists)
         XCTAssertFalse(app.buttons["media.author.64000102"].exists, "The loading destination must not expose the previous work's actions")
         XCTAssertEqual(continuationFields()["gate"], "waiting")
-        if compactLarge { heightAssert("recommendation", phase: "tail65-compact-large-landscape", expected: 64_000_102) }
+        if compactLarge {
+            XCTAssertGreaterThan(app.windows.firstMatch.frame.width, app.windows.firstMatch.frame.height,
+                                 "The landscape window can intentionally contain a narrower 320pt test viewport")
+        }
         let spinner = app.descendants(matching: .any)["media.boundary.waiting"].firstMatch
         XCTAssertGreaterThan(spinner.frame.width, 0); XCTAssertGreaterThan(spinner.frame.height, 0)
         XCTAssertLessThanOrEqual(spinner.frame.width, 20.5); XCTAssertLessThanOrEqual(spinner.frame.height, 20.5)

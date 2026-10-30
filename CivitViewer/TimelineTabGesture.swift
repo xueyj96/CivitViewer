@@ -43,6 +43,7 @@ struct MainTabs<Timeline: View, Authors: View, Search: View, Settings: View>: Vi
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .environment(\.viewingBottomBarHeight, chrome.hasViewer ? compactBarHeight : 0)
+        .environment(\.viewingControlsReferenceInset, compactBarHeight)
         if !chrome.hasViewer { measuredBar }
         }
         .overlay(alignment: .bottom) {

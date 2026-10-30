@@ -75,11 +75,20 @@ private struct ViewingChromeToggleKey: EnvironmentKey {
 private struct ViewingBottomBarHeightKey: EnvironmentKey {
     static let defaultValue: CGFloat = 0
 }
+/// A shared floating-control baseline. It positions overlays without reducing
+/// the media canvas, including full-screen entries which have no visible tabs.
+private struct ViewingControlsReferenceInsetKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 0
+}
 private struct MediaActionHitFramesKey: PreferenceKey {
     static let defaultValue: [CGRect] = []
     static func reduce(value: inout [CGRect], nextValue: () -> [CGRect]) { value.append(contentsOf: nextValue()) }
 }
 extension EnvironmentValues {
+    var viewingControlsReferenceInset: CGFloat {
+        get { self[ViewingControlsReferenceInsetKey.self] }
+        set { self[ViewingControlsReferenceInsetKey.self] = newValue }
+    }
     var viewingBottomBarHeight: CGFloat {
         get { self[ViewingBottomBarHeightKey.self] }
         set { self[ViewingBottomBarHeightKey.self] = newValue }
@@ -289,7 +298,7 @@ struct MediaDeck: View {
     var loadMoreAutomatically: (() async -> Void)? = nil
     var refreshFromStart: (() async -> Void)? = nil
     var restartRetryAvailableAt: Date? = nil
-    var bottomBarInset: CGFloat = 0
+    var bottomBarInset: CGFloat? = nil
     var continuationTopInset: CGFloat = 0
     var gestureTopExclusion: CGFloat = 110
     var gestureExcludedFrames: [CGRect] = []
@@ -326,6 +335,8 @@ struct MediaDeck: View {
     @State private var continuationAction: Task<Void, Never>?
     @State private var continuationActionID: UUID?
     @State private var continuationStatusFrame: CGRect = .zero
+    @State private var boundaryDragOffset: CGFloat = 0
+    @Environment(\.viewingControlsReferenceInset) private var controlsReferenceInset
     private var visibleItems: [MediaItem] { items.filter { !authorBlocks.blocks($0) && TagPolicy.verdict(names: $0.tagNames, blocked: detailTagSnapshot ?? blocklist.names) == .allowed } }
     private var historyContext: HistoryContext? { history.context(ownerID: session.tagLibraryOwnerID) }
     private var viewerVisible: Bool { appeared && isVisible && !session.showLogin }
@@ -377,17 +388,30 @@ struct MediaDeck: View {
                     boundaryDemand = .init(anchorID: id, context: continuationIntentContext)
                     resolveBoundaryDemand()
                 }
-            }, boundaryWaiting: awaitingNextItem, onUserBoundaryCancel: cancelBoundaryDemand, onPageDisplayed: { id in
+            }, boundaryWaiting: awaitingNextItem, onUserBoundaryCancel: {
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) { cancelBoundaryDemand() }
+            }, onBoundaryDrag: { offset, phase in
+                switch phase {
+                case .began, .changed:
+                    var transaction = Transaction(); transaction.disablesAnimations = true
+                    withTransaction(transaction) { boundaryDragOffset = offset }
+                case .ended, .cancelled:
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) { boundaryDragOffset = 0 }
+                }
+            }, onPageDisplayed: { id in
                 if let demand = boundaryDemand, demand.context == continuationIntentContext,
                    demand.targetID == id, focused == id, awaitingNextItem { boundaryDemand = nil }
             }) { id, settled in
                 let content = page(id: id, settled: settled, size: geometry.size)
+                    // Move rendered content inside its stable native host. The
+                    // pager's hit-test viewport and internal queue stay in place.
+                    .offset(y: awaitingNextItem ? max(0, boundaryDragOffset) - geometry.size.height : boundaryDragOffset)
                     .allowsHitTesting(!awaitingNextItem).accessibilityHidden(awaitingNextItem)
                     .environmentObject(session).environmentObject(session.oauth)
                     .environment(\.ordinaryColorScheme, ordinaryScheme)
                     .environment(\.dynamicTypeSize, dynamicTypeSize)
                     .environment(\.verticalSizeClass, verticalSizeClass)
-                    .environment(\.viewingBottomBarHeight, bottomBarInset)
+                    .environment(\.viewingBottomBarHeight, bottomBarInset ?? controlsReferenceInset)
                     .preferredColorScheme(.dark)
                 #if DEBUG && targetEnvironment(simulator)
                 if ResumePromptQA.enabled { return AnyView(content.defaultAppStorage(ResumePromptQA.defaults)) }
@@ -431,6 +455,9 @@ struct MediaDeck: View {
                 resolveBoundaryDemand()
                 if viewerVisible, value?.failure != nil, previous?.failure == nil { chrome.reveal() }
             }
+            .onChange(of: awaitingNextItem) { _, waiting in
+                if !waiting { boundaryDragOffset = 0 }
+            }
         }.clipped().background(.black)
             .overlay {
                 if awaitingNextItem {
@@ -455,8 +482,10 @@ struct MediaDeck: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .accessibilityElement(children: .contain)
                     .accessibilityIdentifier("media.boundary.state")
+                    .offset(y: boundaryDragOffset)
                 }
             }
+            .clipped()
             .overlay {
                 if viewerVisible && visibleItems.isEmpty {
                     VStack(spacing: 14) {
@@ -572,6 +601,7 @@ struct MediaDeck: View {
             focused = demand.anchorID
         }
         boundaryDemand = nil
+        boundaryDragOffset = 0
     }
 
     private func startContinuationAction(_ action: @escaping () async -> Void) {

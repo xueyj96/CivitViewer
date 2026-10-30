@@ -20,7 +20,6 @@ struct MediaDetailsView: View {
     @State private var authorBlockTask: Task<Void, Never>?
     @State private var authorBlockRequestID: UUID?
     @State private var displayedItemID: Int
-    @State private var posterFailed = false
     @State private var imageFailure: String?
     @State private var posterRetry = 0
     private var blurPreview: Bool { (session.account?.blurNsfw ?? true) && ((item.browsingLevel ?? 1) & 28 != 0) }
@@ -168,25 +167,23 @@ struct MediaDetailsView: View {
     @ViewBuilder private var preview: some View {
         ZStack {
             Color(uiColor: .secondarySystemBackground)
-            Group {
             if item.isVideo, let source = item.mediaURL {
                 CachedPoster(source: source, declared: item.posterURL, active: false, fit: true,
                     retryToken: posterRetry, allowLocalExtraction: true, diagnosticWorkID: item.id,
-                    onFailure: { posterFailed = $0 }, showsFailure: false)
+                    showsFailure: false, emptyPlaceholder: "暂无可用封面", imageBlur: blurPreview ? 24 : 0)
             } else if !item.isVideo, let imageURL = item.mediaURL {
                 CachedImage(url: imageURL, fit: true, allowsRetry: false, retryToken: posterRetry,
                             showsFailure: false, onFailureMessage: { imageFailure = $0 })
+                    .blur(radius: blurPreview ? 24 : 0)
             } else {
-                Image(systemName: item.isVideo ? "play.rectangle" : "photo")
-                    .font(.system(size: 30, weight: .regular))
-                    .foregroundStyle(.secondary)
+                if item.isVideo {
+                    Text("暂无可用封面").font(.subheadline).foregroundStyle(.secondary)
+                } else {
+                    Image(systemName: "photo")
+                        .font(.system(size: 30, weight: .regular)).foregroundStyle(.secondary)
+                }
             }
-            }.blur(radius: blurPreview ? 24 : 0)
-            if posterFailed {
-                MediaLoadFailureContent(message: "封面暂时无法加载", symbol: "play.rectangle",
-                                        retryLabel: "重试封面", retryIdentifier: "details.poster.retry",
-                                        retry: { posterRetry += 1 })
-            } else if let imageFailure {
+            if let imageFailure {
                 MediaLoadFailureContent(message: imageFailure, retryIdentifier: "details.image.retry",
                                         retry: { posterRetry += 1 })
             }
@@ -284,13 +281,11 @@ struct MediaDetailsView: View {
             else { error = "最多组合 8 个标签，可先取消已有选择。" }
         } label: {
             HStack(spacing: 5) {
-                if chosen { Image(systemName: "checkmark").font(.caption.weight(.semibold)) }
                 Text(tag).font(.subheadline).lineLimit(2).fixedSize(horizontal: false, vertical: true)
                 if blocked { Image(systemName: "tag.slash").font(.caption2) }
             }.padding(.horizontal, 12).padding(.vertical, 9)
                 .foregroundStyle(chosen ? Color.blue : (blocked ? Color.secondary : Color.primary))
                 .background(chosen ? Color.blue.opacity(0.12) : Color(uiColor: .secondarySystemBackground), in: Capsule())
-                .overlay(Capsule().stroke(chosen ? Color.blue.opacity(0.25) : .clear, lineWidth: 1))
         }.buttonStyle(.plain).accessibilityIdentifier("details.tag.\(tag)")
             .accessibilityLabel(tag).accessibilityValue(chosen ? "已选入组合搜索" : "未选择")
             .contextMenu {

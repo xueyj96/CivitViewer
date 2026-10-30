@@ -1,0 +1,110 @@
+{
+  "version": "0.3.0",
+  "build": 67,
+  "at_utc": "2026-10-30T21:20:50.042858+00:00",
+  "stage": "INSTALLED67_INDEPENDENT_VERSION_AND_DATA_METADATA_READ_BACK",
+  "base_commit": "451c6dcbe4b21a3e398065019db1a3846fc601e5",
+  "base_build": 66,
+  "source_sha256": "06f4ce7665bf75b2108740215d44be3a48bb766b5d0f750490578424ead182a7",
+  "installed": true,
+  "published": false,
+  "source_committed": false,
+  "source_pushed": false,
+  "behavior": [
+    "Waiting destination follows backward drag to reveal the retained previous player; additional forward drag is bounded resistance and cannot start another request",
+    "Late arrival still opens automatically; held reverse cancellation wins over incoming focus",
+    "Video details show neutral unavailable-cover text until a real frame/image is cached; cache updates replace it automatically",
+    "Selected tags change text/background only; no check glyph, outline extent or first-selection row displacement; removal remains in fixed menu",
+    "Measured floating-control reference aligns author/follow and seek across real timeline collection creator paths, without resizing the media canvas"
+  ],
+  "local_validation": {
+    "distinct_silent_UI_cases_passed": 15,
+    "failed": 0,
+    "runs": [
+      {
+        "passed": 3,
+        "failed": 0
+      },
+      {
+        "passed": 12,
+        "failed": 0
+      }
+    ],
+    "same_binary_and_source_in_both_runs": true,
+    "production_inputs": 98,
+    "read_only_review_open_material_findings": 0,
+    "release_arm64": true
+  },
+  "controlled_layout_sample": {
+    "synthetic_same_video": true,
+    "before_author_follow_y": {
+      "timeline": 704,
+      "collection": 752
+    },
+    "after_author_follow_y": {
+      "timeline": 704,
+      "collection": 704,
+      "creator": 704
+    },
+    "after_seek_y": 748,
+    "after_seek_max_y": 792,
+    "unchanged_viewport_y": 62,
+    "unchanged_viewport_height": 778
+  },
+  "prior_failures_retained": [
+    "First14:11 pass/3 fail; directory row54pt shift, viewport/window test assumption, collapsed-fixture tag assumption",
+    "Second4:1 pass/3 fail; nested grid target ambiguity, menu target ambiguity, selected outline1pt extent"
+  ],
+  "package": {
+    "bundle_identifier": "com.xueyj.civitviewer",
+    "version": "0.3.0",
+    "build": "67",
+    "minimum_ios": "17.0",
+    "platforms": [
+      "iPhoneOS"
+    ],
+    "ipa_filename": "CivitViewer-0.3.0-build67-sideload.ipa",
+    "ipa_bytes": 6312841,
+    "ipa_sha256": "2dc465d4b486f261aeafecbadd12c99ec5f07b5ee3972e2e0ed078dbfbee41e7",
+    "packaged_regular_files": 11,
+    "macho_binaries_checked": 2,
+    "personal_provisioning_profiles": 0,
+    "personal_certificate_signatures": 0,
+    "personal_signing_entitlements": 0,
+    "local_checksum_signatures": "ad-hoc, must be replaced by recipient signing",
+    "deep_strict_codesign_passed": true,
+    "ipa_crc_and_file_hashes_passed": true,
+    "main_executable_has_no_coverage_sections": true,
+    "original_input_app_unchanged": true,
+    "recipient_resigning_required": true,
+    "device_install_after_recipient_resigning": "NOT_TESTED"
+  },
+  "limits": [
+    "Only neutral muted local simulator fixtures",
+    "Normal physical-phone replay and real-site latency not tested",
+    "Recipient re-sign and installation not tested"
+  ],
+  "public_release_at_local_validation": 66,
+  "delivery_readback": {
+    "at_utc": "2026-10-30T21:25:09.382279+00:00",
+    "same_original_phone_version": "0.3.0(67)",
+    "data_preservation": {
+      "six_complete_metadata_scopes_unchanged": true,
+      "regular_files": 334,
+      "preset_metadata_unchanged": true,
+      "preset_regular_files": 1,
+      "method": "Fresh before/after paths, sizes and mtime; contents not read, copied or hashed",
+      "category_counts": {
+        "offline": 139,
+        "history": 1,
+        "diagnostics": 4,
+        "cache": 187,
+        "preferences": 1,
+        "tagLibrary": 2
+      }
+    },
+    "app_auto_launched": false,
+    "physical_normal_use_UI_replay": "NOT_TESTED",
+    "public_release_at_this_readback": 66
+  }
+}

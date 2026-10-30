@@ -78,18 +78,6 @@ struct TagDirectoryView: View {
                         } label: { AppFilterLabel(title: "首字母", symbol: "textformat.abc") }
                             .buttonStyle(AppActionButtonStyle())
                     }
-                    if !selected.isEmpty {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 6) {
-                                ForEach(selected) { tag in
-                                    Button { toggle(tag) } label: {
-                                        HStack(spacing: 6) { Text(tag.name).lineLimit(1); Image(systemName: "xmark").font(.caption2) }
-                                    }.buttonStyle(AppActionButtonStyle(tone: .accent))
-                                        .accessibilityLabel("移除搜索标签 " + tag.name)
-                                }
-                            }
-                        }
-                    }
                     HStack(spacing: 10) {
                         Text("标签范围").font(.caption).foregroundStyle(.secondary)
                         Spacer()
@@ -120,8 +108,6 @@ struct TagDirectoryView: View {
                                     }
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                     if blocklist.names.contains(TagPolicy.normalize(tag.name)) { Image(systemName: "tag.slash").font(.caption2).foregroundStyle(.secondary) }
-                                    Image(systemName: chosen ? "checkmark.circle.fill" : "plus").font(.caption)
-                                        .foregroundStyle(chosen ? Color.blue : Color.secondary)
                                 }.foregroundStyle(chosen ? Color.blue : Color.primary)
                                     .padding(.horizontal, 10).frame(maxWidth: .infinity, minHeight: 44)
                                     .padding(.vertical, 3)
@@ -167,7 +153,22 @@ struct TagDirectoryView: View {
                 }.scrollDismissesKeyboard(.interactively)
             }.navigationTitle("选择标签").navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    AppToolbarItem(placement: .topBarLeading) { Menu { NavigationLink("标签库与同步设置") { LocalTagLibraryView().appNavigationBack() } } label: { Image(systemName: "ellipsis") }.buttonStyle(AppActionButtonStyle()).accessibilityLabel("标签设置") }
+                    AppToolbarItem(placement: .topBarLeading) {
+                        Menu {
+                            NavigationLink("标签库与同步设置") { LocalTagLibraryView().appNavigationBack() }
+                            if !selected.isEmpty {
+                                Section("已选标签") {
+                                    ForEach(selected) { tag in
+                                        Button("移除 " + tag.name) { toggle(tag) }
+                                            .accessibilityLabel("移除搜索标签 " + tag.name)
+                                    }
+                                }
+                                Button("清空已选标签", role: .destructive) { selected = []; selectionError = nil }
+                            }
+                        } label: { Image(systemName: "ellipsis") }
+                        .buttonStyle(AppActionButtonStyle()).accessibilityLabel("标签设置")
+                        .accessibilityIdentifier("tag-directory.actions")
+                    }
                     AppToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() }.buttonStyle(AppActionButtonStyle()) }
                 }
                 .task(id: key) {
