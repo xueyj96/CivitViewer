@@ -1,0 +1,128 @@
+{
+  "version": "0.3.0",
+  "build": 61,
+  "verified_at_utc": "2026-10-29T13:59:40.667390+00:00",
+  "stage": "LOCAL_REVIEW_BUILD_READY",
+  "base_commit": "f3013e3201fdd4bfb4a112a4b8b9ba9e2ec25ffa",
+  "source_sha256": "34f70ae1bd9efbad7b4176dbf8a60ec0f035cfefcbd3bd4e1be22c8b64a0806a",
+  "source_manifest_encoding": "UTF-8 sorted path:sha256 followed by LF per file",
+  "source_committed": false,
+  "source_pushed": false,
+  "installed": false,
+  "published": false,
+  "phone_and_public_release_build": 60,
+  "changes": [
+    "Inline video preparation and repair status within the existing 44pt progress band; delayed transient feedback; real repair cancel; unchanged video canvas",
+    "Native collapsed gesture help includes central long press to hide/restore chrome; gesture handlers unchanged",
+    "Resume prompt expires after 10 seconds of actual continuous presentation; overlays/lifecycle hide cancel timer; fresh presentation gets a new interval; history retained",
+    "Separate prefetch concurrency slider: 2/4/6/8, default4; image and video share slots, distinct from future-item count3/6/10; foreground priority and Wi-Fi policy retained"
+  ],
+  "local_validation": {
+    "timeline_model_assertions": 128,
+    "timeline_model_source": "Actual TimelineModel with FakeTimelineSource reads",
+    "timeline_state_assertions": 33,
+    "simulator_distinct_ui_cases_covered": 8,
+    "ui_broad_run": {
+      "requested": 8,
+      "passed": 7,
+      "failed": 1,
+      "failure": "Large-type landscape decorative spinner rendered outside the fixed44pt progress band",
+      "original_result_retained": true
+    },
+    "ui_affected_retest": {
+      "requested": 2,
+      "passed": 2,
+      "failed": 0,
+      "change_since_broad_run": "Only decorative spinner dynamicTypeSize fixed to medium; UI test added diagnostics; no assertion relaxation"
+    },
+    "ui_other_six_scope": "Production sources governing central gestures, resume model/lifecycle, settings slider/help identical to broad run; only affected playback status tests rerun",
+    "ui_canvas_checks": "Actual AVPlayerLayer/surface bounds, videoRect, window positions, sourceScale and transform identical before/after inline repair cancellation",
+    "visuals_inspected": [
+      "Inline repair normal portrait",
+      "Inline repair large-type landscape",
+      "Concurrency slider",
+      "Gesture help collapsed/expanded and large type"
+    ],
+    "neutral_silent_local_fixtures_only": true,
+    "real_site_requests": 0,
+    "independent_exact_artifact_review_open_material_findings": 0,
+    "review_manifest_sha256": "2e6138c9d9f4c6e4f254770f85f2c1f3de55c79090647983cfdde6e0c8187c0c",
+    "retained_failure_history": [
+      "Initial UI helper compile type mismatch fixed",
+      "Hidden-control XCTest AX query/row locator failures corrected while retaining actual pointer and pixel checks",
+      "Spinner overflow observed and fixed",
+      "First Release package rejected coverage sections; rebuilt with ENABLE_CODE_COVERAGE=NO",
+      "Review aggregate hash encoding mismatch corrected in a new manifest; original retained"
+    ]
+  },
+  "prefetch_controlled_local_only": {
+    "cache_limit_gb": 5,
+    "injected_free_space_gb": 10,
+    "measured_video_byte_interval_concurrency": [
+      {
+        "configured": 2,
+        "observed": 2
+      },
+      {
+        "configured": 4,
+        "observed": 4
+      },
+      {
+        "configured": 6,
+        "observed": 6
+      },
+      {
+        "configured": 8,
+        "observed": 8
+      }
+    ],
+    "global_cache_queue_peak": 10,
+    "foreground_new_admission_limit": 4,
+    "background_new_admission_limit": 8,
+    "priority_note": "Shared-writer reclassification may temporarily exceed a lane admission cap but creates no new permit; total remains bounded10",
+    "shared_writer_reuse_and_priority_lifetime_passed": true,
+    "new_visible_start_before_held_background_release_ms": 99,
+    "live_concurrency_changes": "8 to2 to6 tested",
+    "final_pending_reservation_bytes": 0,
+    "rss_peak_bytes": 33554432,
+    "rss_process": "Compiled macOS Swift probe only, compiler excluded; test adapter uses AppKit and localhost transport",
+    "memory_workload": {
+      "video_files": 8,
+      "bytes_per_file": 8388608,
+      "aggregate_response_bytes": 67108864,
+      "file_backed_transfers": true
+    },
+    "phone_memory_measurement": "NOT_RUN",
+    "real_site_latency_comparison": "NOT_RUN"
+  },
+  "local_ipa": {
+    "bundle_identifier": "com.xueyj.civitviewer",
+    "version": "0.3.0",
+    "build": "61",
+    "minimum_ios": "17.0",
+    "platforms": [
+      "iPhoneOS"
+    ],
+    "ipa_filename": "CivitViewer-0.3.0-build61-sideload.ipa",
+    "ipa_bytes": 6268882,
+    "ipa_sha256": "2a23edf1e29bf2108491b9a3971ae20fcf5242b36aef8d31155c1fc600826eb6",
+    "packaged_regular_files": 11,
+    "macho_binaries_checked": 2,
+    "personal_provisioning_profiles": 0,
+    "personal_certificate_signatures": 0,
+    "personal_signing_entitlements": 0,
+    "local_checksum_signatures": "ad-hoc, must be replaced by recipient signing",
+    "deep_strict_codesign_passed": true,
+    "ipa_crc_and_file_hashes_passed": true,
+    "main_executable_has_no_coverage_sections": true,
+    "original_input_app_unchanged": true,
+    "recipient_resigning_required": true,
+    "device_install_after_recipient_resigning": "NOT_TESTED"
+  },
+  "acceptance_limits": [
+    "No61 phone install or physical UI acceptance",
+    "No recipient re-sign installation",
+    "No Git commit/push/merge/release",
+    "No live-site performance or cloud mutation"
+  ]
+}

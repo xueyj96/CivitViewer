@@ -27,6 +27,7 @@ enum DiagnosticCode: String, Codable, CaseIterable, Identifiable {
     case posterLoaded, posterFailed, posterCaptured
     case posterOpened, posterStarted, posterCancelled, posterCaptureStarted, posterDeferred
     case tagProbe, tagSearch
+    case emptyMediaViewport
     var id: Self { self }
     var isFrameReadyMeasurement: Bool { [.frameReadyNetwork, .frameReadyCache, .frameReadyLocal].contains(self) }
     var title: String {
@@ -62,6 +63,7 @@ enum DiagnosticCode: String, Codable, CaseIterable, Identifiable {
         case .posterDeferred: "等待提取封面"
         case .tagProbe: "标签可展示作品核对"
         case .tagSearch: "标签作品查询"
+        case .emptyMediaViewport: "当前视口没有可展示作品"
         }
     }
 }

@@ -102,10 +102,20 @@ final class MediaCache: ObservableObject {
     /// In-process invalidation only. Keys reuse the hashed disk identity; no URL
     /// manifest or event history is retained, and cache hits never publish.
     var posterUpdates: AnyPublisher<String, Never> { posterWrites.eraseToAnyPublisher() }
-    private struct Flight { let id: UUID; let task: Task<URL, Error>; var maximum: Int64; var consumers: Set<UUID> }
+    private struct Flight {
+        let id: UUID
+        let task: Task<URL, Error>
+        var maximum: Int64
+        var consumers: Set<UUID>
+        var foregroundConsumers: Set<UUID>
+    }
     private struct PreloadQuotaFailure: Error { let maximum: Int64 }
     private var inFlight: [String: Flight] = [:]
-    private let downloads = MediaLoadQueue()
+    // Keep ordinary visible loads at four concurrent transfers. Preloads can
+    // use eight background slots, while two of the ten total slots stay
+    // available for foreground work; queued foreground requests are preferred.
+    private let downloads = MediaLoadQueue(limit: 10, maximumWaiting: 64,
+                                          backgroundLimit: 8, foregroundLimit: 4)
     private let posterJobs = MediaLoadQueue(limit: 1, maximumWaiting: 2)
     private var pinned: [String: Int] = [:]
     private var repairPins: [String: Int] = [:]
@@ -473,14 +483,19 @@ final class MediaCache: ObservableObject {
         let requestGeneration = generation
         let flightID: UUID, task: Task<URL, Error>, inheritedMaximum: Int64
         if var flight = inFlight[downloadKey] {
-            flight.consumers.insert(consumer); inFlight[downloadKey] = flight; flightID = flight.id; task = flight.task
+            flight.consumers.insert(consumer)
+            if !prefetching { flight.foregroundConsumers.insert(consumer) }
+            inFlight[downloadKey] = flight; flightID = flight.id; task = flight.task
+            if !prefetching { downloads.setPriority(.foreground, for: flight.id) }
             inheritedMaximum = flight.maximum
         } else {
             let id = UUID(), target = directory.appendingPathComponent(downloadKey)
             flightID = id
             inheritedMaximum = video ? videoMaximum : Self.imageDownloadMaximum
             task = Task<URL, Error> {
-                try await downloads.acquire(id)
+                let existingForegroundDemand = inFlight[downloadKey]?.id == id && inFlight[downloadKey]?.foregroundConsumers.isEmpty == false
+                let priority: MediaLoadQueue.Priority = (!prefetching || existingForegroundDemand) ? .foreground : .background
+                try await downloads.acquire(id, priority: priority)
                 defer { downloads.release(id) }
                 try Task.checkCancellation()
                 // Reserve once per admitted flight, not once per consumer or
@@ -542,7 +557,8 @@ final class MediaCache: ObservableObject {
                     return target
                 } catch { throw ImageLoadError.cacheWrite }
             }
-            inFlight[downloadKey] = .init(id: id, task: task, maximum: inheritedMaximum, consumers: [consumer])
+            inFlight[downloadKey] = .init(id: id, task: task, maximum: inheritedMaximum,
+                consumers: [consumer], foregroundConsumers: prefetching ? [] : [consumer])
         }
         defer { leave(downloadKey, flightID: flightID, consumer: consumer); trim() }
         do {
@@ -578,8 +594,15 @@ final class MediaCache: ObservableObject {
     private func leave(_ key: String, flightID: UUID, consumer: UUID) {
         guard var flight = inFlight[key], flight.id == flightID else { return }
         flight.consumers.remove(consumer)
+        let wasForeground = flight.foregroundConsumers.remove(consumer) != nil
         if flight.consumers.isEmpty { flight.task.cancel(); inFlight[key] = nil }
-        else { inFlight[key] = flight }
+        else {
+            inFlight[key] = flight
+            if wasForeground {
+                let priority: MediaLoadQueue.Priority = flight.foregroundConsumers.isEmpty ? .background : .foreground
+                downloads.setPriority(priority, for: flight.id)
+            }
+        }
     }
 
     func setPrefetchTargets(_ targets: [(URL, Bool)], owner: UUID) {

@@ -1,0 +1,63 @@
+{
+  "version": "0.3.0",
+  "build": 66,
+  "at_utc": "2026-10-30T16:56:27.227885+00:00",
+  "stage": "LOCAL_REVIEW_BUILD_READY",
+  "source_sha256": "f69b62319981fbbdf99ab69c91472f854f92060c6d7845d4a40a003a46745d4e",
+  "installed": false,
+  "published": false,
+  "source_committed": false,
+  "source_pushed": false,
+  "base_frozen_build": 65,
+  "behavior": [
+    "Ordinary media loading/cache restore/prefetch has no popup or phase narration; current buffering uses a bare spinner and the loaded ranges remain on the seek track",
+    "Only a requested destination with no work ready uses one loading label and spinner in the page canvas",
+    "The requested destination stays through real failure/end; successful arrival opens the first next work without a second swipe",
+    "Native actual-display acknowledgment ends the handoff; second held reverse can cancel and restore the retained anchor player",
+    "Old hosting-root actions are hidden from accessibility and touch while the destination is waiting",
+    "Confirmed failed playback tries at most three following works; waiting is never a failure;401/429 and cancellation stop retries/advance",
+    "Repair shows only inline percentage/cancel; compatibility waiting uses a bare spinner"
+  ],
+  "local_checks": {
+    "silent_simulator_cases_passed": 15,
+    "failed": 0,
+    "policy_checks_passed": 71,
+    "review_open_material_findings": 0,
+    "production_inputs": 98
+  },
+  "package": {
+    "bundle_identifier": "com.xueyj.civitviewer",
+    "version": "0.3.0",
+    "build": "66",
+    "minimum_ios": "17.0",
+    "platforms": [
+      "iPhoneOS"
+    ],
+    "ipa_filename": "CivitViewer-0.3.0-build66-sideload.ipa",
+    "ipa_bytes": 6310022,
+    "ipa_sha256": "4e6b77cfd7af69ed0418e6b1117cefb089dfadb7c77a601b5ccb41e30e2cc618",
+    "packaged_regular_files": 11,
+    "macho_binaries_checked": 2,
+    "personal_provisioning_profiles": 0,
+    "personal_certificate_signatures": 0,
+    "personal_signing_entitlements": 0,
+    "local_checksum_signatures": "ad-hoc, must be replaced by recipient signing",
+    "deep_strict_codesign_passed": true,
+    "ipa_crc_and_file_hashes_passed": true,
+    "main_executable_has_no_coverage_sections": true,
+    "original_input_app_unchanged": true,
+    "recipient_resigning_required": true,
+    "device_install_after_recipient_resigning": "NOT_TESTED"
+  },
+  "prior_failures_retained": [
+    "final1 source review:2P2",
+    "final2 source review:1P2",
+    "final3 UI:9pass/5fail; no install",
+    "Release command flag failure; corrected build used"
+  ],
+  "limits": [
+    "Only neutral local audio-free fixtures; no real-site latency/throughput measurement",
+    "Physical normal-use UI replay not performed at this local freeze",
+    "No GitHub publication"
+  ]
+}

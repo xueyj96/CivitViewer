@@ -106,6 +106,23 @@ enum VideoSeekMath {
         return min(1, max(0, fraction)) * upperBound
     }
 
+    /// Loaded intervals can be disjoint after seeking; preserve every real gap.
+    static func bufferedSegments(duration: Double, ranges: [SeekTimeRange]) -> [SeekTimeRange] {
+        guard duration.isFinite, duration > 0 else { return [] }
+        let valid = ranges.compactMap { range -> SeekTimeRange? in
+            guard range.start.isFinite, range.end.isFinite, range.end > range.start,
+                  range.end > 0, range.start < duration else { return nil }
+            return .init(start: max(0, range.start) / duration, end: min(duration, range.end) / duration)
+        }.sorted { $0.start < $1.start }
+        var result: [SeekTimeRange] = []
+        for range in valid {
+            if let last = result.last, range.start <= last.end {
+                result[result.count - 1] = .init(start: last.start, end: max(last.end, range.end))
+            } else { result.append(range) }
+        }
+        return result
+    }
+
     static func allowsHorizontalDrag(vx: Double, vy: Double) -> Bool {
         guard vx.isFinite, vy.isFinite else { return false }
         return abs(vx) > abs(vy) * 1.2
@@ -119,7 +136,7 @@ import UIKit
 struct VideoSeekControl: UIViewRepresentable {
     var position: Double
     var duration: Double
-    var buffered: Double
+    var bufferedRanges: [SeekTimeRange]
     var enabled: Bool
     var interactionActive: Bool = false
     let onSeek: (Double, MediaPanPhase) -> Void
@@ -152,7 +169,7 @@ struct VideoSeekControl: UIViewRepresentable {
 
     final class SeekTrackView: UIControl {
         var positionFraction: CGFloat = 0 { didSet { setNeedsDisplay() } }
-        var bufferedFraction: CGFloat = 0 { didSet { setNeedsDisplay() } }
+        var bufferedSegments: [SeekTimeRange] = [] { didSet { if oldValue != bufferedSegments { setNeedsDisplay() } } }
         var emphasized = false { didSet { setNeedsDisplay() } }
         var controlEnabled = true { didSet { isUserInteractionEnabled = controlEnabled; alpha = controlEnabled ? 1 : 0.55 } }
         var durationValue: Double = 0
@@ -193,15 +210,16 @@ struct VideoSeekControl: UIViewRepresentable {
             guard trackRect.width > 0 else { return }
             let trackPath = CGPath(roundedRect: trackRect, cornerWidth: trackHeight / 2,
                                    cornerHeight: trackHeight / 2, transform: nil)
-            let baseColor = UIColor.white.withAlphaComponent(emphasized ? 0.72 : 0.58)
+            let baseColor = UIColor(white: 0.25, alpha: 0.6)
             context.setFillColor(baseColor.cgColor)
             context.addPath(trackPath); context.fillPath()
             context.saveGState()
             context.addPath(trackPath); context.clip()
-            let bufferedWidth = trackRect.width * min(1, max(0, bufferedFraction))
-            if bufferedWidth > 0 {
-                let bufferedRect = CGRect(x: trackRect.minX, y: trackRect.minY, width: bufferedWidth, height: trackRect.height)
-                context.setFillColor(UIColor.white.withAlphaComponent(0.38).cgColor)
+            context.setFillColor(UIColor.white.withAlphaComponent(0.48).cgColor)
+            for interval in bufferedSegments {
+                let bufferedRect = CGRect(x: trackRect.minX + trackRect.width * interval.start,
+                                          y: trackRect.minY, width: trackRect.width * (interval.end - interval.start),
+                                          height: trackRect.height)
                 context.fill(bufferedRect)
             }
             let playedWidth = trackRect.width * min(1, max(0, positionFraction))
@@ -249,9 +267,15 @@ struct VideoSeekControl: UIViewRepresentable {
             if !tracking {
                 view.positionFraction = fraction(value.position, duration: value.duration)
             }
-            view.bufferedFraction = CGFloat(fraction(value.buffered, duration: value.duration))
+            view.bufferedSegments = VideoSeekMath.bufferedSegments(duration: value.duration, ranges: value.bufferedRanges)
             view.accessibilityLabel = "播放进度"
             view.accessibilityValue = "\(Self.clock(value.position)) / \(Self.clock(value.duration))"
+            #if DEBUG && targetEnvironment(simulator)
+            if ProcessInfo.processInfo.arguments.contains("--qa-buffering62") {
+                view.accessibilityValue = "position=\(value.position);duration=\(value.duration);segments=" +
+                    view.bufferedSegments.map { "\($0.start):\($0.end)" }.joined(separator: ",")
+            }
+            #endif
             view.onAccessibilitySeek = { [weak self] seconds in
                 guard let self, let fraction = VideoSeekMath.time(fraction: seconds / self.configuration.duration, duration: self.configuration.duration) else { return }
                 self.beginInteraction()

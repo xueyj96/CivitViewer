@@ -112,6 +112,22 @@ import Foundation
                 }
             }
         }
+        let segments = VideoSeekMath.bufferedSegments(duration: 100, ranges: [
+            .init(start: 40, end: 60), .init(start: -5, end: 20), .init(start: 10, end: 30),
+            .init(start: 60, end: 80), .init(start: 90, end: 120),
+            .init(start: .nan, end: 30), .init(start: 2, end: .infinity), .init(start: 7, end: 6)])
+        check(segments == [.init(start: 0, end: 0.3), .init(start: 0.4, end: 0.8), .init(start: 0.9, end: 1)],
+              "Loaded segments clip to duration and merge overlaps without filling real gaps")
+        check(VideoSeekMath.bufferedSegments(duration: 100, ranges: [.init(start: 40, end: 50)]) == [.init(start: 0.4, end: 0.5)],
+              "A seek-loaded range cannot paint the unbuffered beginning as loaded")
+        check(VideoSeekMath.bufferedSegments(duration: 100, ranges: [.init(start: 1, end: 1), .init(start: -5, end: -1), .init(start: 100, end: 120)]).isEmpty,
+              "Zero-length and wholly outside intervals do not render")
+        for duration in [0.0, -.infinity, .infinity, .nan] {
+            check(VideoSeekMath.bufferedSegments(duration: duration, ranges: [.init(start: 0, end: 10)]).isEmpty,
+                  "Unknown or invalid duration cannot invent a buffer percentage")
+        }
+        check(VideoSeekMath.bufferedSegments(duration: 100, ranges: [.init(start: 10, end: 20), .init(start: 20.0001, end: 30)]).count == 2,
+              "Even a small positive hole stays unbuffered")
         print("VideoSeekChecks: \(checks) local math assertions passed")
     }
 }

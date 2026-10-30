@@ -318,8 +318,8 @@ import Combine
         guard !Task.isCancelled, visible, !restoreState.isRefreshing,
               !followed || session.account != nil else { return }
         bindHistory(ownerID: session.tagLibraryOwnerID)
-        // Starting over consumes the old offer, without removing its history.
-        dismissPrompt()
+        // Refreshing the current feed is independent of the saved resume offer.
+        // Only an explicit prompt close or restore consumes that offer.
         let previousState: TimelineRestoreState = restoreState.isRestoring ? .browsing : restoreState
         let token = UUID()
         invalidateOperation()

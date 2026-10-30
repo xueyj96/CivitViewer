@@ -99,11 +99,28 @@ struct MediaFormatQAView: View {
         guard CollectionPagingQA.enabled,
               let argument = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--qa-auto-continuation=") }),
               let value = argument.components(separatedBy: "=").last,
-              ["filtered-empty", "initial-empty", "rate-limited", "repeated-cursor", "sparse-reserve"].contains(value) else { return nil }
+              ["filtered-empty", "initial-empty", "rate-limited", "repeated-cursor", "sparse-reserve", "sparse-long64"].contains(value) else { return nil }
         return value
     }
     static var enabled: Bool { scenario != nil }
-    static var filter: FeedFilter { FeedFilter(kind: .video, sort: "Newest", period: "AllTime") }
+    static var filter: FeedFilter {
+        if scenario == "sparse-long64" {
+            return FeedFilter(kind: .video, sort: "Most Reactions", period: "Day", videoDurationRange: .init(minimumSeconds: 120, minimumIsExclusive: true))
+        }
+        return FeedFilter(kind: .video, sort: "Newest", period: "AllTime")
+    }
+    /// Long-duration metadata exercises filtering; validated local silent bytes
+    /// remain the short fixture, so this is not a long-video playback benchmark.
+    static var longSparseItems: [MediaItem] {
+        (0..<18).map { index in
+            var item = MediaItem(id: 64_000_100 + index, url: "https://example.invalid/long-sparse64-\(index).mp4",
+                                 width: 320, height: 180, type: "video", username: "LongSparse_\(index)",
+                                 browsingLevel: 1, thumbnail: nil, creatorID: CollectionPagingQA.ownerID, tags: [])
+            item.metadata = VideoTechnicalMetadata(duration: 181)
+            item.offlinePosterURL = CollectionPagingQA.root.appendingPathComponent("pattern-2.png")
+            return item
+        }
+    }
     @MainActor final class Observer: ObservableObject {
         @Published var requests = 0
         @Published var first = 0
@@ -114,6 +131,7 @@ struct MediaFormatQAView: View {
         @Published var kind = "none"
         @Published var gate = "armed"
         @Published var gateReleased = false
+        @Published var gateScheduled = false
         var prepared = false
         var limited = false
         var value: String { "scenario=\(AutoContinuationQA.scenario ?? "none");requests=\(requests);first=\(first);continuations=\(continuations);lastCursor=\(lastCursor);returned=\(returned);errors=\(errors);kind=\(kind);gate=\(gate)" }
@@ -132,6 +150,9 @@ struct MediaFormatQAView: View {
                 try CollectionPagingQA.seedVideoCache(source: source, item: item)
             }
         }
+        if scenario == "sparse-long64" {
+            for item in longSparseItems { try CollectionPagingQA.seedVideoCache(source: source, item: item) }
+        }
         shared.prepared = true
     }
     static func page(filter: FeedFilter, cursor: String?) async throws -> MediaPage {
@@ -140,7 +161,7 @@ struct MediaFormatQAView: View {
         if cursor == nil { shared.first += 1 } else { shared.continuations += 1 }
         // Pause only the local transport response, after the real model has
         // entered loading. The QA button never calls a model or paging action.
-        if cursor == "scan-0", ["filtered-empty", "initial-empty", "sparse-reserve", "rate-limited"].contains(scenario), !shared.gateReleased {
+        if cursor == "scan-0", ["filtered-empty", "initial-empty", "sparse-reserve", "sparse-long64", "rate-limited"].contains(scenario), !shared.gateReleased {
             shared.gate = "waiting"
             let deadline = ContinuousClock.now + .seconds(60)
             while !shared.gateReleased {
@@ -155,7 +176,16 @@ struct MediaFormatQAView: View {
         try await Task.sleep(for: .milliseconds(cursor == nil ? 180 : 250))
         let fixture = CollectionPagingQA.items
         let page: MediaPage
-        if scenario == "sparse-reserve" {
+        if scenario == "sparse-long64" {
+            if cursor == nil {
+                page = .init(items: Array(longSparseItems.prefix(3)), metadata: .init(nextCursor: "scan-0"))
+            } else {
+                guard let cursor, cursor.hasPrefix("scan-"), let index = Int(cursor.dropFirst(5)), (0..<45).contains(index) else { throw ClientError.invalidResponse }
+                var short = fixture[2]; short.metadata = VideoTechnicalMetadata(duration: 90)
+                let item = index % 3 == 2 ? longSparseItems[index / 3 + 3] : short
+                page = .init(items: [item], metadata: .init(nextCursor: index == 44 ? nil : "scan-\(index + 1)"))
+            }
+        } else if scenario == "sparse-reserve" {
             let sparse = CollectionPagingQA.sparseReserveItems
             if cursor == nil {
                 page = .init(items: [sparse[0]], metadata: .init(nextCursor: "scan-0"))
@@ -189,10 +219,18 @@ private struct AutoContinuationQAReadback: View {
         HStack(spacing: 8) {
             Text(state.value).font(.system(size: 1)).frame(width: 1, height: 1).opacity(0.01).allowsHitTesting(false)
                 .accessibilityIdentifier("continuation.qa.state").accessibilityValue(state.value)
-            if ["filtered-empty", "initial-empty", "sparse-reserve", "rate-limited"].contains(AutoContinuationQA.scenario ?? "") {
-                Button(state.gateReleased ? "本地响应已释放" : "释放本地响应") { state.gateReleased = true }
+            if ["filtered-empty", "initial-empty", "sparse-reserve", "sparse-long64", "rate-limited"].contains(AutoContinuationQA.scenario ?? "") {
+                Button(state.gateReleased ? "本地响应已释放" : "释放本地响应") {
+                    if ProcessInfo.processInfo.arguments.contains("--qa-release-during-drag64") {
+                        state.gateScheduled = true
+                        Task { @MainActor in
+                            try? await Task.sleep(for: .seconds(2))
+                            state.gateReleased = true
+                        }
+                    } else { state.gateReleased = true }
+                }
                     .accessibilityIdentifier("continuation.qa.release")
-                    .disabled(state.gate != "waiting" || state.gateReleased)
+                    .disabled(state.gate != "waiting" || state.gateReleased || state.gateScheduled)
                     .frame(minHeight: 44)
             }
         }.frame(maxWidth: .infinity, minHeight: 44).background(Color(uiColor: .systemBackground))
@@ -240,6 +278,17 @@ private struct AutoContinuationQAReadback: View {
         return (try? JSONDecoder().decode(FeedFilter.self, from: legacy)) ?? FeedFilter()
     }
     static var items: [MediaItem] {
+        if let argument = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--qa-failure-next66=") }),
+           let count = Int(argument.components(separatedBy: "=").last ?? ""), [2, 4].contains(count) {
+            return (0..<6).map { index in
+                var item = MediaItem(id: 28_037_100 + index, url: "", width: 320, height: 180,
+                    type: "video", username: "FailurePattern_\(index)", browsingLevel: 1,
+                    thumbnail: nil, creatorID: ownerID, tags: [])
+                item.offlineMediaURL = index < count ? root.appendingPathComponent("missing-failure66-\(index).mp4") : ResumePromptQA.videoFixtureURL
+                item.offlinePosterURL = root.appendingPathComponent("pattern-2.png")
+                return item
+            }
+        }
         if let mode = playbackDiagnosticMode {
             let workID = mode == "poster-stream49" ? PlaybackFailureDiagnostic.posterTargetWorkID : (mode == "invalid-untargeted" ? 146_853_867 :
                 (mode == "invalid-current-target" ? PlaybackFailureDiagnostic.currentTargetWorkID : PlaybackFailureDiagnostic.targetWorkID)
@@ -418,6 +467,8 @@ struct CollectionPagingQAView: View {
                     Text(filter.videoDurationRange?.summary ?? "none").font(.system(size: 1)).frame(width: 1, height: 1).opacity(0.01)
                         .accessibilityIdentifier("duration.qa.state").accessibilityValue(filter.videoDurationRange?.summary ?? "none")
                 }
+            } else if ready && ProcessInfo.processInfo.arguments.contains("--qa-empty-deck63") {
+                EmptyMediaDeckQAView()
             } else if ready && ProcessInfo.processInfo.arguments.contains("--qa-poster-details50") {
                 MediaDetailsView(item: posterDetailsItem50)
             } else if let biographyCase, ready {
@@ -477,6 +528,56 @@ struct CollectionPagingQAView: View {
         case "url": return "Creator portfolio:\nhttps://example.com/" + String(repeating: "portfolio-segment-", count: 10) + "\n\nLinks use the original safe destination and wrap within the available width."
         default: return "A creator working with images and videos. This paragraph is long enough to verify that the biography uses the available width and truncates after exactly two lines.\n\nThe second paragraph stays separate when expanded.\n\nA final paragraph for a controlled layout check."
         }
+    }
+}
+
+struct EmptyMediaDeckQAView: View {
+    private static let creatorID = 900_000_063
+    @State private var seeded = false
+    @State private var focused: Int? = 900_000_063
+    @State private var phase: FeedContinuationState = .scanning
+    @State private var requests = 0
+    @State private var invalidSource = false
+    @State private var closed = false
+    private var item: MediaItem {
+        var value = MediaItem(id: Self.creatorID, url: invalidSource ? "" : "https://example.invalid/blank63.mp4",
+            width: 480, height: 854, type: "video", username: "Synthetic_Blank_Page", browsingLevel: 1,
+            thumbnail: nil, creatorID: Self.creatorID, tags: [])
+        if !invalidSource { value.offlineMediaURL = ResumePromptQA.videoFixtureURL }
+        return value
+    }
+    private func request() async { requests += 1; phase = .scanning }
+    var body: some View {
+        ZStack(alignment: .top) {
+            Color.black
+            if closed {
+                Text("已退出查看器").accessibilityIdentifier("empty.qa.closed")
+            } else if seeded {
+                FeedMediaViewer(items: [item], focused: $focused, initialID: Self.creatorID, continuationState: phase,
+                    refreshFromStart: { await request() }, onClose: { closed = true }, loadMore: { await request() })
+            }
+            HStack {
+                Button("模拟失败") { phase = .failed(.request(message: "Local synthetic failure", retryAfter: nil)) }
+                    .accessibilityIdentifier("empty.qa.fail")
+                Button("模拟空结果") { phase = .ready }.accessibilityIdentifier("empty.qa.ready")
+                Button("显示作品") { AuthorBlocklist.shared.remove(id: Self.creatorID); phase = .ended }
+                    .accessibilityIdentifier("empty.qa.recover")
+                Button("无效地址") { invalidSource = true; AuthorBlocklist.shared.remove(id: Self.creatorID); phase = .ended }
+                    .accessibilityIdentifier("empty.qa.invalid")
+                Button("过滤全部") {
+                    _ = AuthorBlocklist.shared.add(Creator(id: Self.creatorID, username: "Synthetic_Blank_Page"))
+                    phase = .ended
+                }.accessibilityIdentifier("empty.qa.block")
+            }.font(.caption2).buttonStyle(.bordered).padding(.top, 80)
+            Text("raw=1;requests=\(requests)").font(.system(size: 1)).frame(width: 1, height: 1).opacity(0.01)
+                .accessibilityIdentifier("empty.qa.state").accessibilityValue("raw=1;requests=\(requests)")
+        }
+        .task {
+            AuthorBlocklist.shared.remove(id: Self.creatorID)
+            _ = AuthorBlocklist.shared.add(Creator(id: Self.creatorID, username: "Synthetic_Blank_Page"))
+            seeded = true
+        }
+        .onDisappear { AuthorBlocklist.shared.remove(id: Self.creatorID) }
     }
 }
 

@@ -1,0 +1,100 @@
+{
+  "version": "0.3.0",
+  "build": 62,
+  "verified_at_utc": "2026-10-29T15:46:34.346217+00:00",
+  "stage": "LOCAL_REVIEW_BUILD_READY",
+  "base_frozen_build": 61,
+  "base_git_commit": "f3013e3201fdd4bfb4a112a4b8b9ba9e2ec25ffa",
+  "source_sha256": "57bf62b447f25cf66d911b595c4b9aba938de212f35eb864df3201b815baf3a8",
+  "source_manifest_encoding": "UTF-8 sorted path:sha256 LF",
+  "source_committed": false,
+  "source_pushed": false,
+  "installed": false,
+  "published": false,
+  "phone_and_public_delivery_pointer": 60,
+  "changes": [
+    "Future media preloading stays silent; current-only passive20pt central spinner appears after500ms and unmounts immediately on recovery/pause/clear-screen/overlay",
+    "Ordinary video loading/cache/buffer text strip removed; actual format repair retains progress/cancel in unchanged44pt rail",
+    "Dark track, light actual loadedTimeRanges segments and white played position; disjoint loaded gaps preserved and invalid durations never invent percentages",
+    "Resume prompt remains actionable until explicit restore or close;61 automatic expiry removed",
+    "Feed restart no longer dismisses the saved offer; successful, failed and cooldown refresh all preserve it; existing explicit dismissals/history retained"
+  ],
+  "local_validation": {
+    "seek_and_buffer_math_assertions": 358,
+    "timeline_model_assertions": 124,
+    "timeline_model_reads": "FakeTimelineSource, actual production model",
+    "first_ui_run": {
+      "requested": 5,
+      "passed": 1,
+      "failed": 4,
+      "preserved": true,
+      "failure": "Hidden native waiting/repair elements remained in AX tree; fixed by conditional mounting without relaxing negative assertions"
+    },
+    "broad_ui_run": {
+      "requested": 8,
+      "passed": 8,
+      "failed": 0,
+      "production_source_sha256": "8640705529cde8841da1b9ac24dcdf23f5cb62e3c801ba8659c8594e53340965"
+    },
+    "affected_final_ui": {
+      "requested": 1,
+      "passed": 1,
+      "failed": 0,
+      "production_source_sha256": "57bf62b447f25cf66d911b595c4b9aba938de212f35eb864df3201b815baf3a8",
+      "scope": "Actual bottom tab double tap increases first-page requests exactly1 and retains enabled resume prompt after11s and filter/tab changes; actual close still works"
+    },
+    "final_delta_since_broad": "Only feed restart dismissal call removed; model regression checks and one UI case extended. Other seven relevant paths unchanged and not rerun.",
+    "ui_cases": [
+      "Sparse future reserve fill has no current spinner/text/banner",
+      "Autoplay off shows no spinner",
+      "Current wait pause/play/clear/recovery preserves same player and canvas",
+      "Ordinary wait has no repair strip and repair cancellation still works",
+      "Real repair portrait/large-landscape preserves44pt and canvas geometry",
+      "Details overlay preserves resume prompt",
+      "Tab return and explicit close preserve expected state",
+      "11s/filter change/tab refresh retain enabled prompt"
+    ],
+    "neutral_silent_local_fixtures_only": true,
+    "actual_player_muted": true,
+    "real_site_requests": 0,
+    "phone_tested": false,
+    "exact_artifact_review_open_material_findings": 0,
+    "review_manifest_sha256": "d4de47c7e4a9cd0fa46adfc25e9a0e566ce035e4be45b0ab4a16179805093a09"
+  },
+  "resume_diagnosis": {
+    "installed60_source_path_confirmed": "restartFromStart called dismissPrompt before requesting data, including failed refresh",
+    "candidate61_issue_removed": "Automatic ten-second expiry invoked persistent dismissal",
+    "user_observed_phone_root_cause": "NOT_REPRODUCED on physical phone; source findings are not proof of the original episode",
+    "data_handling": "No existing manual dismissal/history removal or migration"
+  },
+  "local_ipa": {
+    "bundle_identifier": "com.xueyj.civitviewer",
+    "version": "0.3.0",
+    "build": "62",
+    "minimum_ios": "17.0",
+    "platforms": [
+      "iPhoneOS"
+    ],
+    "ipa_filename": "CivitViewer-0.3.0-build62-sideload.ipa",
+    "ipa_bytes": 6264902,
+    "ipa_sha256": "4200626a957613f38b889f57e74e711e4451226e4f2a5e931458d4839584b2b8",
+    "packaged_regular_files": 11,
+    "macho_binaries_checked": 2,
+    "personal_provisioning_profiles": 0,
+    "personal_certificate_signatures": 0,
+    "personal_signing_entitlements": 0,
+    "local_checksum_signatures": "ad-hoc, must be replaced by recipient signing",
+    "deep_strict_codesign_passed": true,
+    "ipa_crc_and_file_hashes_passed": true,
+    "main_executable_has_no_coverage_sections": true,
+    "original_input_app_unchanged": true,
+    "recipient_resigning_required": true,
+    "device_install_after_recipient_resigning": "NOT_TESTED"
+  },
+  "limitations": [
+    "No62 phone install or physical acceptance",
+    "No real-site buffering or latency measurement",
+    "No recipient re-sign installation",
+    "No commit/push/merge/publication"
+  ]
+}

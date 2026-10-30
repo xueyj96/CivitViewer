@@ -28,6 +28,7 @@ private extension View {
     @Published private(set) var hasViewer = false
     private var scopes: [UUID] = []
     private var overlays = Set<UUID>()
+    var isSuspended: Bool { !overlays.isEmpty }
     #if DEBUG && targetEnvironment(simulator)
     @Published private(set) var qaToggleCount = 0
     #endif
@@ -191,7 +192,7 @@ struct FeedContinuationStatusView: View {
                 case .loading, .scanning:
                     HStack(spacing: 8) {
                         ProgressView().controlSize(.small)
-                        Text(state == .scanning ? "正在查找符合条件的作品…" : "正在加载更多作品…")
+                        if empty { Text("正在查找作品…") }
                     }.accessibilityIdentifier("feed.continuation.loading")
                 case .ended:
                     Text(empty ? "当前条件下没有更多作品" : "已经看到最后啦")
@@ -210,12 +211,12 @@ struct FeedContinuationStatusView: View {
                                 .accessibilityIdentifier("feed.continuation.restart")
                         }
                     } else {
-                        Button(action: retry) { Text("加载失败，点此重试").frame(minWidth: 44, minHeight: 44).contentShape(Rectangle()) }
+                        Button(action: retry) { Text("重试").frame(minWidth: 44, minHeight: 44).contentShape(Rectangle()) }
                             .disabled(performing || (failure.retryAvailableAt.map { $0 > context.date } ?? false))
                             .accessibilityIdentifier("feed.continuation.retry")
                     }
                 case .ready:
-                    if empty { ProgressView("正在查找符合条件的作品…") }
+                    if empty { ProgressView("正在查找作品…") }
                 }
             }
             .font(.caption).multilineTextAlignment(.center)
@@ -308,16 +309,18 @@ struct MediaDeck: View {
     @StateObject private var preloader = MediaPreloader()
     @AppStorage("wifiVideoPrefetch") private var wifiVideoPrefetch = true
     @AppStorage("mediaPrefetchCount") private var mediaPrefetchCount = 6
+    @AppStorage(MediaPrefetchConcurrency.defaultsKey) private var mediaPrefetchConcurrency = MediaPrefetchConcurrency.defaultValue
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.ordinaryColorScheme) private var ordinaryScheme
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var advance = PlaybackAdvanceState()
-    @State private var pendingFailedID: Int?
+    @State private var boundaryDemand: MediaContinuationIntent?
     @State private var detailsItem: MediaItem?
     @State private var detailTagSnapshot: Set<String>?
     @State private var orientationScope = UUID()
     @State private var detailsChromeScope = UUID()
+    @State private var pageRecoveryRequest = 0
     @State private var pagedQueueRevision: Int?
     @State private var appeared = false
     @State private var continuationAction: Task<Void, Never>?
@@ -326,38 +329,60 @@ struct MediaDeck: View {
     private var visibleItems: [MediaItem] { items.filter { !authorBlocks.blocks($0) && TagPolicy.verdict(names: $0.tagNames, blocked: detailTagSnapshot ?? blocklist.names) == .allowed } }
     private var historyContext: HistoryContext? { history.context(ownerID: session.tagLibraryOwnerID) }
     private var viewerVisible: Bool { appeared && isVisible && !session.showLogin }
+    private var continuationIntentContext: String { "\(session.feedIdentity):\(queueRevision):\(focusRequest)" }
+    private var awaitingNextItem: Bool {
+        guard let boundaryDemand, let focused else { return false }
+        return viewerVisible && scenePhase == .active && !playbackSuspended && detailsItem == nil &&
+            boundaryDemand.context == continuationIntentContext &&
+            (boundaryDemand.anchorID == focused || boundaryDemand.targetID == focused)
+    }
     private struct PrefetchDemand: Equatable {
         let focus: Int?
         let context: String
         let active: Bool
         let count: Int
+        let concurrency: Int
         let wifiOnly: Bool
         let window: [MediaItem]
     }
     private var prefetchDemand: PrefetchDemand {
         let index = focused.flatMap { id in visibleItems.firstIndex(where: { $0.id == id }) }
         let count = [3, 6, 10].contains(mediaPrefetchCount) ? mediaPrefetchCount : 6
+        let concurrency = MediaPrefetchConcurrency.validated(mediaPrefetchConcurrency)
         let window = index.map { Array(visibleItems.dropFirst($0).prefix(count + 1)) } ?? []
         return PrefetchDemand(focus: focused, context: "\(session.feedIdentity):\(queueRevision)",
             active: viewerVisible && scenePhase == .active && !playbackSuspended,
-            count: count, wifiOnly: wifiVideoPrefetch, window: window)
+            count: count, concurrency: concurrency, wifiOnly: wifiVideoPrefetch, window: window)
     }
 
     var body: some View {
         GeometryReader { geometry in
             NativeMediaPager(ids: pageIDs, focused: $focused, initialID: initialID,
-                             focusRequest: focusRequest, queueRevision: queueRevision,
+                             focusRequest: focusRequest &+ pageRecoveryRequest, queueRevision: queueRevision,
                              viewport: geometry.size,
                              accessibilityIdentifier: historyCheckpoint == nil ? "media.viewer.deck" : "timeline.media.deck",
                              isVisible: viewerVisible && scenePhase == .active,
                              onUserPageSettled: { id in
                 pagedQueueRevision = queueRevision
-            }, onUserContinuationDemand: { _ in
+                if let demand = boundaryDemand, demand.anchorID != id && demand.targetID != id { boundaryDemand = nil }
+            }, onUserContinuationDemand: { id in
                 guard showsLoadMore, continuationState != .ended,
                       continuationState?.isLoading != true, continuationState?.requiresRestart != true else { return }
                 startContinuationAction(loadMore)
+            }, onUserBoundaryDemand: { id in
+                if showsLoadMore, !playbackSuspended, id == focused {
+                    // The native pager owns the settled tail. A response can
+                    // already be in SwiftUI while its native queue waits for this
+                    // gesture to finish, so resolve an available next ID too.
+                    boundaryDemand = .init(anchorID: id, context: continuationIntentContext)
+                    resolveBoundaryDemand()
+                }
+            }, boundaryWaiting: awaitingNextItem, onUserBoundaryCancel: cancelBoundaryDemand, onPageDisplayed: { id in
+                if let demand = boundaryDemand, demand.context == continuationIntentContext,
+                   demand.targetID == id, focused == id, awaitingNextItem { boundaryDemand = nil }
             }) { id, settled in
                 let content = page(id: id, settled: settled, size: geometry.size)
+                    .allowsHitTesting(!awaitingNextItem).accessibilityHidden(awaitingNextItem)
                     .environmentObject(session).environmentObject(session.oauth)
                     .environment(\.ordinaryColorScheme, ordinaryScheme)
                     .environment(\.dynamicTypeSize, dynamicTypeSize)
@@ -383,30 +408,87 @@ struct MediaDeck: View {
                 guard viewerVisible, scenePhase == .active, !playbackSuspended,
                       let id = focused, let index = visibleItems.firstIndex(where: { $0.id == id }) else { preloader.stop(); return }
                 preloader.update(visibleItems, after: index, count: prefetchDemand.count,
-                    context: prefetchDemand.context, wifiOnly: wifiVideoPrefetch)
+                    context: prefetchDemand.context, wifiOnly: wifiVideoPrefetch,
+                    concurrency: prefetchDemand.concurrency)
             }
             .onChange(of: visibleItems) { previous, current in
-                let ids = current.map(\.id)
-                if let failed = pendingFailedID, let target = advance.target(failedID: failed, focused: focused, ids: ids, active: isVisible && scenePhase == .active) {
-                    pendingFailedID = nil; focused = target
-                } else {
-                    let target = MediaFocusPolicy.target(current: focused, previousItems: previous, items: current)
-                    if target != focused { focused = target }
-                }
+                resolveBoundaryDemand()
+                if current.isEmpty { revealFallbackControls() }
+                let target = MediaFocusPolicy.target(current: focused, previousItems: previous, items: current)
+                if target != focused { focused = target }
             }
             .onChange(of: focused) { _, id in
-                advance.focusChanged(id); if pendingFailedID != id { pendingFailedID = nil }
+                if let demand = boundaryDemand, demand.anchorID != id && demand.targetID != id { boundaryDemand = nil }
+                advance.focusChanged(id)
                 if let id, id < 0, viewerVisible, chrome.activeScope == orientationScope { chrome.reveal() }
             }
             .onChange(of: queueRevision) { _, _ in
-                advance = PlaybackAdvanceState(); pendingFailedID = nil
+                advance = PlaybackAdvanceState(); boundaryDemand = nil
             }
+            .onChange(of: focusRequest) { _, _ in boundaryDemand = nil }
+            .onChange(of: playbackSuspended) { _, value in if value { cancelBoundaryDemand() } }
             .onChange(of: continuationState) { previous, value in
+                resolveBoundaryDemand()
                 if viewerVisible, value?.failure != nil, previous?.failure == nil { chrome.reveal() }
             }
         }.clipped().background(.black)
+            .overlay {
+                if awaitingNextItem {
+                    ZStack {
+                        Color.black.allowsHitTesting(false)
+                        if let state = continuationState, state.failure != nil || state == .ended {
+                            FeedContinuationStatusView(state: state, empty: true, darkCanvas: true,
+                                performing: continuationAction != nil, restartRetryAvailableAt: restartRetryAvailableAt,
+                                retry: { startContinuationAction(loadMore) },
+                                restart: refreshFromStart.map { action in { startContinuationAction(action) } })
+                                .padding(.horizontal, 28)
+                        } else {
+                            VStack(spacing: 10) {
+                                ProgressView().controlSize(.small).tint(.white.opacity(0.8))
+                                    .dynamicTypeSize(.medium).frame(width: 20, height: 20)
+                                    .accessibilityIdentifier("media.boundary.waiting")
+                                Text("正在加载…").font(.caption).foregroundStyle(.white.opacity(0.7))
+                                    .accessibilityIdentifier("media.boundary.message")
+                            }.allowsHitTesting(false)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("media.boundary.state")
+                }
+            }
+            .overlay {
+                if viewerVisible && visibleItems.isEmpty {
+                    VStack(spacing: 14) {
+                        if let state = continuationState, state.isLoading || state.failure != nil || state == .ended {
+                            FeedContinuationStatusView(state: state, empty: true, darkCanvas: true,
+                                performing: continuationAction != nil, restartRetryAvailableAt: restartRetryAvailableAt,
+                                retry: { startContinuationAction(loadMore) },
+                                restart: refreshFromStart.map { action in { startContinuationAction(action) } })
+                        } else {
+                            Text("当前没有可展示的作品").font(.callout)
+                                .accessibilityIdentifier("media.empty.message")
+                            if showsLoadMore {
+                                Button("继续查找") { startContinuationAction(loadMore) }
+                                    .buttonStyle(AppActionButtonStyle(tone: .neutral))
+                                    .disabled(continuationAction != nil)
+                                    .accessibilityIdentifier("media.empty.continue")
+                            }
+                        }
+                    }
+                    .foregroundStyle(.white).padding(24)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("media.empty.state")
+                    .onAppear {
+                        revealFallbackControls()
+                        LocalDiagnosticsStore.shared.note(area: .lifecycle, code: .emptyMediaViewport,
+                            count: min(items.count, 1_000_000))
+                    }
+                }
+            }
             .overlay(alignment: .top) {
-                if showsLoadMore, let state = continuationState, viewerVisible,
+                if showsLoadMore, let state = continuationState, viewerVisible, !visibleItems.isEmpty, !awaitingNextItem,
                    !state.isLoading,
                    (focused == visibleItems.last?.id || state.failure != nil),
                    !chrome.isHidden(for: orientationScope) {
@@ -439,25 +521,57 @@ struct MediaDeck: View {
             .sheet(item: $detailsItem, onDismiss: { detailTagSnapshot = nil; onDetailsVisibility?(false); chrome.resume(after: detailsChromeScope) }) { MediaDetailsView(item: $0) }
             .onAppear { appeared = true; syncViewingChrome(); if viewerVisible && scenePhase == .active { ViewingOrientationController.shared.beginViewer(orientationScope) } }
             .onChange(of: isVisible) { _, value in
-                if !value { cancelContinuationAction(); preloader.stop() }
+                if !value { cancelBoundaryDemand(); cancelContinuationAction(); preloader.stop() }
                 syncViewingChrome()
                 if value && appeared && !session.showLogin && scenePhase == .active { ViewingOrientationController.shared.beginViewer(orientationScope) }
                 else if !value { ViewingOrientationController.shared.endViewer(orientationScope) }
             }
             .onChange(of: scenePhase) { _, phase in
-                if phase != .active { cancelContinuationAction(); preloader.stop() }
+                if phase != .active { cancelBoundaryDemand(); cancelContinuationAction(); preloader.stop() }
                 syncViewingChrome()
                 if phase == .active && viewerVisible { ViewingOrientationController.shared.beginViewer(orientationScope) }
             }
             .onChange(of: session.showLogin) { _, shown in
-                if shown { cancelContinuationAction(); preloader.stop() }
+                if shown { cancelBoundaryDemand(); cancelContinuationAction(); preloader.stop() }
                 syncViewingChrome()
             }
             .onChange(of: detailsItem) { _, item in
-                if item != nil { chrome.suspend(for: detailsChromeScope) }
+                if item != nil { cancelBoundaryDemand(); chrome.suspend(for: detailsChromeScope) }
                 else { chrome.resume(after: detailsChromeScope) }
             }
-            .onDisappear { appeared = false; cancelContinuationAction(); preloader.stop(); chrome.end(orientationScope); chrome.resume(after: detailsChromeScope); ViewingOrientationController.shared.endViewer(orientationScope) }
+            .onDisappear { appeared = false; cancelBoundaryDemand(); cancelContinuationAction(); preloader.stop(); chrome.end(orientationScope); chrome.resume(after: detailsChromeScope); ViewingOrientationController.shared.endViewer(orientationScope) }
+    }
+
+    private func resolveBoundaryDemand() {
+        guard let demand = boundaryDemand else { return }
+        let active = viewerVisible && scenePhase == .active && !playbackSuspended && detailsItem == nil
+        let ids = visibleItems.map(\.id)
+        guard active, demand.context == continuationIntentContext, let current = focused,
+              current == demand.anchorID || current == demand.targetID,
+              ids.contains(demand.anchorID) else { boundaryDemand = nil; return }
+        if let target = demand.targetID {
+            if !ids.contains(target) { boundaryDemand = nil }
+            return
+        }
+        if let target = demand.target(focused: focused, ids: ids, context: continuationIntentContext, active: active) {
+            if demand.cause == .failedPlayback,
+               advance.target(failedID: demand.anchorID, focused: focused, ids: ids, active: active) == nil {
+                boundaryDemand = nil
+                return
+            }
+            var pending = demand
+            pending.targetID = target
+            boundaryDemand = pending
+            focused = target
+        }
+    }
+
+    private func cancelBoundaryDemand() {
+        if let demand = boundaryDemand, let target = demand.targetID, demand.context == continuationIntentContext,
+           target == focused, visibleItems.contains(where: { $0.id == demand.anchorID }) {
+            focused = demand.anchorID
+        }
+        boundaryDemand = nil
     }
 
     private func startContinuationAction(_ action: @escaping () async -> Void) {
@@ -473,9 +587,15 @@ struct MediaDeck: View {
         continuationAction?.cancel(); continuationAction = nil; continuationActionID = nil
     }
 
+    private func revealFallbackControls() {
+        guard viewerVisible, scenePhase == .active, chrome.activeScope == orientationScope else { return }
+        chrome.reveal()
+    }
     private func syncViewingChrome() {
-        if viewerVisible && scenePhase == .active { chrome.begin(orientationScope) }
-        else { chrome.end(orientationScope) }
+        if viewerVisible && scenePhase == .active {
+            chrome.begin(orientationScope)
+            if visibleItems.isEmpty { revealFallbackControls() }
+        } else { chrome.end(orientationScope) }
     }
 
     private var pageIDs: [Int] {
@@ -485,21 +605,27 @@ struct MediaDeck: View {
 
     @ViewBuilder private func page(id: Int, settled: Bool, size: CGSize) -> some View {
         if let item = visibleItems.first(where: { $0.id == id }) {
-            MediaPageView(item: item, active: settled && focused == item.id && viewerVisible && !playbackSuspended && scenePhase == .active,
+            MediaPageView(item: item, active: settled && (focused == item.id || (awaitingNextItem && boundaryDemand?.anchorID == item.id)) && viewerVisible && !playbackSuspended && scenePhase == .active,
                           chromeScope: orientationScope, onToggleChrome: { chrome.toggle(orientationScope) },
                           gestureTopExclusion: gestureTopExclusion,
                           gestureExcludedFrames: gestureExcludedFrames + (continuationStatusFrame.isEmpty ? [] : [continuationStatusFrame]),
-                          onKindSwipe: onKindSwipe, onKindDrag: onKindDrag, onAuthor: onAuthor, pausedForDetails: detailsItem != nil, onDetails: { value in
+                          onKindSwipe: onKindSwipe, onKindDrag: onKindDrag, onAuthor: onAuthor, pausedForDetails: detailsItem != nil || awaitingNextItem, onDetails: { value in
                 guard detailsItem == nil else { return }
                 detailTagSnapshot = blocklist.names; onDetailsVisibility?(true); detailsItem = value
             }, onUnavailable: { id in
-                guard isVisible, !playbackSuspended, scenePhase == .active, focused == id else { return }
-                if let target = advance.target(failedID: id, focused: focused, ids: visibleItems.map(\.id), active: true) {
-                    pendingFailedID = nil; focused = target
-                } else if advance.consecutive < 6, visibleItems.last?.id == id, showsLoadMore, automaticLoadingAllowed, pendingFailedID != id {
-                    pendingFailedID = id; startContinuationAction(loadMoreAutomatically ?? loadMore)
+                guard viewerVisible, !playbackSuspended, scenePhase == .active, detailsItem == nil,
+                      advance.canAdvance(failedID: id, focused: focused, active: true),
+                      boundaryDemand?.anchorID != id else { return }
+                let ids = visibleItems.map(\.id)
+                let hasNext = ids.firstIndex(of: id).map { ids.indices.contains($0 + 1) } ?? false
+                guard hasNext || (showsLoadMore && automaticLoadingAllowed) else { return }
+                boundaryDemand = .init(anchorID: id, context: continuationIntentContext, cause: .failedPlayback)
+                resolveBoundaryDemand()
+                if boundaryDemand != nil, continuationState != .ended, continuationState?.isLoading != true,
+                   continuationState?.requiresRestart != true {
+                    startContinuationAction(loadMoreAutomatically ?? loadMore)
                 }
-            }, historyContext: historyContext, resumePosition: resumePositions[item.id], retainDuringInterruption: focused == item.id && isVisible, onQualifiedExposure: { item, context in
+            }, historyContext: historyContext, resumePosition: resumePositions[item.id], retainDuringInterruption: (focused == item.id || boundaryDemand?.anchorID == item.id) && isVisible, onQualifiedExposure: { item, context in
                 history.record(item, context: context, checkpoint: historyCheckpoint?(item))
             }).id("\(item.id):queue:\(queueRevision)")
                 .frame(width: size.width, height: size.height).clipped()
@@ -512,6 +638,16 @@ struct MediaDeck: View {
                 Text("已看完这段浏览记录").font(.headline)
                 Button("加载当前最新内容", action: endAction).buttonStyle(.borderedProminent)
             }.foregroundStyle(.white).frame(width: size.width, height: size.height)
+        } else {
+            VStack(spacing: 12) {
+                Text("作品列表已更新").font(.callout)
+                if let next = visibleItems.first {
+                    Button("返回当前作品") { focused = next.id; pageRecoveryRequest &+= 1 }
+                        .buttonStyle(AppActionButtonStyle(tone: .neutral))
+                }
+            }.foregroundStyle(.white).frame(width: size.width, height: size.height)
+                .accessibilityIdentifier("media.page.updated")
+                .onAppear { revealFallbackControls() }
         }
     }
 
@@ -587,13 +723,21 @@ struct MediaPageView: View {
                                            onKindSwipe: onKindSwipe, onKindDrag: onKindDrag, onDoubleTap: openAuthor)
                             .blur(radius: shouldBlur && !revealed ? 24 : 0)
                     }
+                } else {
+                    VStack(spacing: 10) {
+                        Image(systemName: "exclamationmark.circle").font(.title2)
+                        Text("这条作品暂时无法打开").font(.callout)
+                        Text("媒体地址不可用，可查看详情或切换作品").font(.caption).foregroundStyle(.secondary)
+                    }.foregroundStyle(.white).frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .accessibilityIdentifier("media.source.unavailable")
+                        .onAppear { revealMissingSourceControls() }
                 }
             }
             if shouldBlur && !revealed {
                 Button { revealed = true } label: { Label("显示这条作品", systemImage: "eye").padding(14).background(.ultraThinMaterial, in: Capsule()) }
                     .frame(maxWidth: .infinity, maxHeight: .infinity).viewingChromeHidden(chromeHidden)
             }
-            if !displaysVideo { mediaActions().padding(.horizontal, 20).padding(.bottom, bottomBarHeight + 8) }
+            if !displaysVideo || item.mediaURL == nil { mediaActions().padding(.horizontal, 20).padding(.bottom, bottomBarHeight + 8) }
         }.clipped()
         .coordinateSpace(name: actionSpace)
         .onPreferenceChange(MediaActionHitFramesKey.self) { actionHitFrames = $0 }
@@ -608,7 +752,15 @@ struct MediaPageView: View {
             guard BrowsingHistory.shared.accepts(context) else { return }
             qualifiedContext = context; onQualifiedExposure?(effectiveItem, context)
         }
-        .onChange(of: active) { _, value in if value { qualifiedContext = nil } }
+        .onChange(of: active) { _, value in
+            if value { qualifiedContext = nil; revealMissingSourceControls() }
+        }
+        .onChange(of: chromeAvailable) { _, value in if value { revealMissingSourceControls() } }
+    }
+
+    private func revealMissingSourceControls() {
+        guard active, item.mediaURL == nil, chromeAvailable, !pausedForDetails else { return }
+        chrome.reveal()
     }
 
     private func mediaActions(muted: Binding<Bool>? = nil) -> some View {

@@ -96,6 +96,8 @@ import UIKit
             value["bounds"] = rect(scroll.bounds)
             value["contentSize"] = ["width": Double(scroll.contentSize.width), "height": Double(scroll.contentSize.height)]
             value["panState"] = scroll.panGestureRecognizer.state.rawValue
+            value["tracking"] = scroll.isTracking
+            value["bounces"] = scroll.bounces
             value["dragging"] = scroll.isDragging; value["decelerating"] = scroll.isDecelerating
             value["scrollEnabled"] = scroll.isScrollEnabled; value["pagingEnabled"] = scroll.isPagingEnabled
         }

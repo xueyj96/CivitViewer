@@ -1,0 +1,77 @@
+{
+  "version": "0.3.0",
+  "build": 63,
+  "verified_at_utc": "2026-10-29T18:09:03.908349+00:00",
+  "stage": "LOCAL_REVIEW_BUILD_READY",
+  "base_frozen_build": 62,
+  "base_git_commit": "f3013e3201fdd4bfb4a112a4b8b9ba9e2ec25ffa",
+  "source_sha256": "4bdbe682e9e7fd35c4e51b8d79c23b3fe90a2880010501d1aa6149d76aa92366",
+  "source_committed": false,
+  "source_pushed": false,
+  "installed": false,
+  "published": false,
+  "current_phone_build_at_local_validation": 62,
+  "public_release_build": 60,
+  "changes": [
+    "When the current filtered viewport is empty, show existing real loading/scanning/failure/end state with explicit retry or continuation",
+    "Future preload remains silent while a current work is visible",
+    "Missing media URL retains an unavailable state plus author/details",
+    "Missing page ID offers local return to a visible item without a network reset",
+    "Empty/unavailable fallback reveals controls only for the active visible chrome scope; clear-screen cannot trap exit",
+    "One bounded existing local diagnostic code records empty-current-viewport count only"
+  ],
+  "local_validation": {
+    "first_ui": {
+      "passed": 4,
+      "failed": 0,
+      "scope": "Sparse six-upcoming refill quiet; real initial-empty end; current filtered loading/failure/retry; unavailable source",
+      "source_stage": "Before final clear-screen correction; unchanged paths not relabeled same-final-binary"
+    },
+    "affected_final_ui": {
+      "passed": 4,
+      "failed": 0,
+      "scope": "Current filtered loading/failure/retry and recovery; unavailable source author/details; two clear-screen-to-empty/source scenarios close actual production viewer",
+      "production_source_sha256": "4bdbe682e9e7fd35c4e51b8d79c23b3fe90a2880010501d1aa6149d76aa92366"
+    },
+    "diagnostics_assertions": 47,
+    "real_site_requests": 0,
+    "neutral_silent_local_fixtures_only": true,
+    "actual_player_muted": true,
+    "review_open_material_findings": 0
+  },
+  "diagnosis": {
+    "confirmed_source_gap": "Raw feed may be nonempty while deck visibility filtering produces zero page IDs; old loading feedback was hidden. A nil media source also had no fallback.",
+    "original_phone_episode": "NOT_UNIQUELY_REPRODUCED; these source gaps do not prove the cause of that particular screenshot",
+    "native_pager_interruption": "Unverified hypothesis; state machine unchanged"
+  },
+  "local_ipa": {
+    "bundle_identifier": "com.xueyj.civitviewer",
+    "version": "0.3.0",
+    "build": "63",
+    "minimum_ios": "17.0",
+    "platforms": [
+      "iPhoneOS"
+    ],
+    "ipa_filename": "CivitViewer-0.3.0-build63-sideload.ipa",
+    "ipa_bytes": 6282184,
+    "ipa_sha256": "4cea73ae692f54584d3fd6868968d8569071b28d1e647de9823bb4e6cd113099",
+    "packaged_regular_files": 11,
+    "macho_binaries_checked": 2,
+    "personal_provisioning_profiles": 0,
+    "personal_certificate_signatures": 0,
+    "personal_signing_entitlements": 0,
+    "local_checksum_signatures": "ad-hoc, must be replaced by recipient signing",
+    "deep_strict_codesign_passed": true,
+    "ipa_crc_and_file_hashes_passed": true,
+    "main_executable_has_no_coverage_sections": true,
+    "original_input_app_unchanged": true,
+    "recipient_resigning_required": true,
+    "device_install_after_recipient_resigning": "NOT_TESTED"
+  },
+  "limitations": [
+    "No63 physical UI acceptance at local freeze",
+    "No real-site performance measurement",
+    "No commit/push/publication",
+    "No recipient re-sign installation"
+  ]
+}

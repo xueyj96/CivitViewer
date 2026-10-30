@@ -89,30 +89,44 @@ private struct PlayerLayerView: UIViewRepresentable {
 }
 
 
-private struct VideoProgressChrome: View {
+struct VideoProgressChrome: View {
     let position: Double
     let duration: Double
-    let buffered: Double
+    let bufferedRanges: [SeekTimeRange]
     let enabled: Bool
     let emphasized: Bool
     let showTimes: Bool
     let onSeek: (Double, MediaPanPhase) -> Void
     let onInteractionChange: (Bool) -> Void
+    var preparationVisible = false
+    var preparationProgress: Double? = nil
+    var preparationCanCancel = false
+    var onPreparationCancel: () -> Void = {}
     var body: some View {
-        VideoSeekControl(position: position, duration: duration, buffered: buffered, enabled: enabled,
-                         interactionActive: emphasized, onSeek: onSeek, onInteractionChange: onInteractionChange)
-            .frame(height: 44)
-            .overlay(alignment: .top) {
-                HStack {
-                    Text(clock(position)); Spacer(); Text(duration > 0 ? clock(duration) : "--:--")
-                }.font(.system(size: 11, weight: .medium, design: .monospaced)).foregroundStyle(.white)
-                    .shadow(color: .black.opacity(0.6), radius: 2, y: 1)
-                    .frame(height: 14).padding(.top, 20).opacity(showTimes ? 1 : 0).allowsHitTesting(false)
-                    .accessibilityHidden(!showTimes)
+        ZStack(alignment: .topLeading) {
+            VideoSeekControl(position: position, duration: duration, bufferedRanges: bufferedRanges, enabled: enabled && !preparationCanCancel,
+                             interactionActive: emphasized, onSeek: onSeek, onInteractionChange: onInteractionChange)
+                .frame(height: 44)
+                .allowsHitTesting(!preparationCanCancel).zIndex(0)
+            HStack {
+                Text(clock(position)); Spacer(); Text(duration > 0 ? clock(duration) : "--:--")
+            }.font(.system(size: 11, weight: .medium, design: .monospaced)).foregroundStyle(.white)
+                .shadow(color: .black.opacity(0.6), radius: 2, y: 1)
+                .frame(height: 14).padding(.top, 20)
+                .opacity(showTimes && !preparationVisible ? 1 : 0)
+                .allowsHitTesting(false).accessibilityHidden(!showTimes || preparationVisible)
+            if preparationVisible {
+                VideoPreparationOverlay(visible: true,
+                    progress: preparationProgress, canCancel: preparationCanCancel,
+                    onCancel: onPreparationCancel)
+                    .zIndex(1)
             }
-            .animation(.easeOut(duration: 0.16), value: showTimes)
+        }
+        .frame(height: 44)
+        .accessibilityElement(children: .contain).accessibilityIdentifier("media.progress-band")
+        .animation(.easeOut(duration: 0.16), value: showTimes)
         #if DEBUG && targetEnvironment(simulator)
-            .playbackQAFrame("progress")
+        .playbackQAFrame("progress")
         #endif
     }
     private func clock(_ value: Double) -> String {
@@ -181,6 +195,7 @@ struct VideoSurface<Footer: View>: View {
     @State private var preparationGestureFrame: CGRect = .zero
     #if DEBUG && targetEnvironment(simulator)
     @State private var qaPreparationCancelled = false
+    @State private var qaBuffering = true
     private var qaPreparationActive: Bool {
         VisualControlsQA.enabled && ProcessInfo.processInfo.arguments.contains("--qa-preparation58") &&
             !qaPreparationCancelled && active
@@ -213,7 +228,7 @@ struct VideoSurface<Footer: View>: View {
     @State private var waitingForData = true
     @State private var currentTime = 0.0
     @State private var duration = 0.0
-    @State private var bufferedEnd = 0.0
+    @State private var bufferedRanges: [SeekTimeRange] = []
     @State private var statusObserver: NSKeyValueObservation?
     @State private var playbackObserver: NSKeyValueObservation?
     @State private var bufferObserver: NSKeyValueObservation?
@@ -221,6 +236,14 @@ struct VideoSurface<Footer: View>: View {
     @State private var seekableObserver: NSKeyValueObservation?
     @State private var seekRanges: [SeekTimeRange] = []
     @State private var timeObserver: Any?
+    private struct PlayerEventToken: Equatable {
+        let id = UUID()
+        let item: ObjectIdentifier
+        let generation: Int
+    }
+    @State private var playerStatusEvent: PlayerEventToken?
+    @State private var playerReprepareEvent: PlayerEventToken?
+    @State private var playerSyncEvent: PlayerEventToken?
     @State private var seekingBase: Double?
     @State private var seekTarget: Double?
     @State private var holdingRate = false
@@ -252,11 +275,14 @@ struct VideoSurface<Footer: View>: View {
         #endif
         return duration
     }
-    private var chromeBuffer: Double {
+    private var chromeBufferedRanges: [SeekTimeRange] {
         #if DEBUG && targetEnvironment(simulator)
-        if PlaybackLayoutQA.enabled && PlaybackLayoutQA.variant != "live" { return 18 }
+        if ProcessInfo.processInfo.arguments.contains("--qa-buffering62") {
+            return [.init(start: 0, end: 6), .init(start: 12, end: 18)]
+        }
+        if PlaybackLayoutQA.enabled && PlaybackLayoutQA.variant != "live" { return [.init(start: 0, end: 18)] }
         #endif
-        return bufferedEnd
+        return bufferedRanges
     }
     private var chromeEmphasized: Bool {
         #if DEBUG && targetEnvironment(simulator)
@@ -271,6 +297,7 @@ struct VideoSurface<Footer: View>: View {
     private var loading: Bool {
         #if DEBUG && targetEnvironment(simulator)
         if PlaybackLayoutQA.enabled && PlaybackLayoutQA.variant != "live" { return PlaybackLayoutQA.variant == "buffering" }
+        if VisualControlsQA.enabled && ProcessInfo.processInfo.arguments.contains("--qa-buffering62") && qaBuffering { return active }
         #endif
         return active && !playbackFailed && seekTarget == nil && (awaitingResume || !itemReady || ((playing || holdingRate) && (waitingForData || !readyForDisplay)))
     }
@@ -278,7 +305,19 @@ struct VideoSurface<Footer: View>: View {
         #if DEBUG && targetEnvironment(simulator)
         if qaPreparationActive { return true }
         #endif
-        return active && (loading || (playbackFailed && recovering))
+        return active && (loading || (playbackFailed && (recovering || repreparePending)))
+    }
+    private var repreparePending: Bool { currentItem(matching: playerReprepareEvent) != nil }
+    private var currentVideoWaiting: Bool {
+        active && scenePhase == .active && !chromeHidden && !pausedForOverlay &&
+            (gesturesActive ?? active) && seekTarget == nil && preparingVideo &&
+            (playing || holdingRate || (recovering && userIntent.shouldPlay(autoplay: autoplay)))
+    }
+    private var repairingVideo: Bool {
+        #if DEBUG && targetEnvironment(simulator)
+        if qaPreparationActive { return true }
+        #endif
+        return recovering && repairStage != nil
     }
     private var preparationCanCancel: Bool {
         #if DEBUG && targetEnvironment(simulator)
@@ -294,25 +333,11 @@ struct VideoSurface<Footer: View>: View {
         }
         return frames
     }
-    private var preparationDetail: String {
-        #if DEBUG && targetEnvironment(simulator)
-        if qaPreparationActive { return "转换播放格式 65%" }
-        #endif
-        if repairStage == .transcoding {
-            return repairProgress.flatMap { $0.isFinite ? "转换播放格式 \(Int(min(max($0, 0), 1) * 100))%" : nil } ?? "正在转换播放格式"
-        }
-        if repairStage == .downloading { return "正在取得播放所需的视频" }
-        if repairStage != nil { return "首次播放，正在适配格式" }
-        if recovering { return "正在重新连接视频" }
-        if itemReady && duration > 0 && bufferedEnd > 0 { return "已缓冲到 " + Self.time(bufferedEnd) }
-        return itemReady ? "正在缓冲画面" : "正在加载视频"
-    }
     private var preparationFraction: Double? {
         #if DEBUG && targetEnvironment(simulator)
         if qaPreparationActive { return 0.65 }
         #endif
         if repairStage == .transcoding || repairStage == .downloading { return repairProgress }
-        if repairStage == nil && !recovering && itemReady && duration > 0 && bufferedEnd > 0 { return min(bufferedEnd / duration, 1) }
         return nil
     }
     var body: some View {
@@ -330,14 +355,8 @@ struct VideoSurface<Footer: View>: View {
                         .id(ObjectIdentifier(player)).opacity(awaitingResume ? 0 : 1)
                 }
             }.blur(radius: mediaBlurred ? 24 : 0)
-            // Keep one presentation identity through loading, repair and the
-            // replacement player; only its detail/progress changes in place.
-            VideoPreparationOverlay(visible: preparingVideo, detail: preparationDetail,
-                progress: preparationFraction, canCancel: preparationCanCancel,
-                onCancel: cancelRepair)
-                .videoPreparationPlacement(bottomClearance: bottomBarHeight + 112)
-                .viewingChromeHidden(chromeHidden)
-            if playbackFailed && !recovering {
+            VideoWaitingIndicator(visible: currentVideoWaiting)
+            if playbackFailed && !recovering && !repreparePending {
                 VStack(spacing: 12) {
                     Text(recoveryMessage).foregroundStyle(.white)
                     Button("重试") { nativeRetrySuspended = false; repairAttempted = false; release(); prepare() }
@@ -352,7 +371,7 @@ struct VideoSurface<Footer: View>: View {
                 .padding()
                 .background(Color.black.opacity(0.76), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .viewingChromeHidden(chromeHidden)
-            } else if active && !playbackFailed && !playing && !holdingRate && !preparingVideo && seekTarget == nil {
+            } else if active && !playbackFailed && !playing && !holdingRate && !currentVideoWaiting && seekTarget == nil {
                 Image(systemName: "play.fill").font(.title).foregroundStyle(.white)
                     .frame(width: 64, height: 64).background(.black.opacity(0.35), in: Circle())
                     .allowsHitTesting(false).accessibilityHidden(true).viewingChromeHidden(chromeHidden)
@@ -367,11 +386,14 @@ struct VideoSurface<Footer: View>: View {
                 VStack(spacing: 0) {
                     footer($muted)
                     Group {
-                    if active && !playbackFailed {
-                        VideoProgressChrome(position: chromePosition, duration: chromeDuration, buffered: chromeBuffer,
+                    if active && (!playbackFailed || recovering || repreparePending) {
+                        VideoProgressChrome(position: chromePosition, duration: chromeDuration, bufferedRanges: chromeBufferedRanges,
                                             enabled: canScrub && chromeDuration > 0, emphasized: chromeEmphasized,
                                             showTimes: chromeShowsTimes, onSeek: scrub,
-                                            onInteractionChange: { barInteractionActive = $0 })
+                                            onInteractionChange: { barInteractionActive = $0 },
+                                            preparationVisible: repairingVideo,
+                                            preparationProgress: preparationFraction, preparationCanCancel: preparationCanCancel,
+                                            onPreparationCancel: cancelRepair)
                     } else { Color.clear.frame(height: 44).accessibilityHidden(true) }
                     }.frame(height: 44)
                 }.padding(.horizontal, 20).padding(.bottom, bottomBarHeight)
@@ -399,11 +421,17 @@ struct VideoSurface<Footer: View>: View {
         }
         #if DEBUG && targetEnvironment(simulator)
         .overlay(alignment: .topTrailing) {
+            if VisualControlsQA.enabled && ProcessInfo.processInfo.arguments.contains("--qa-buffering62") && active {
+                Button(qaBuffering ? "模拟恢复" : "模拟缓冲") { qaBuffering.toggle() }
+                    .accessibilityIdentifier("media.qa.buffering-toggle")
+                    .buttonStyle(.bordered).padding(.top, 180)
+            }
             if (CollectionPagingQA.enabled || PlaybackLayoutQA.enabled) && active {
                 let state = "player=\(qaPlayerID?.uuidString ?? "none");prepare=\(qaPrepareCount);created=\(qaCreationCount);position=\(String(format: "%.3f", currentTime));muted=\(player?.isMuted ?? muted);rate=\(player?.rate ?? 0);chrome=\(chromeHidden);toggles=\(chrome.qaToggleCount);taps=\(qaTapCount);rateHolds=\(qaRateHoldCount);seekStarts=\(qaSeekStartCount)"
                 let seekState = ";intent=\(playing);inFlight=\(resumeInFlight);interactivePending=\(interactiveSeekID != nil);seekBase=\(seekingBase != nil);resumeApplied=\(resumeApplied);hasResume=\(requestedResume != nil);active=\(active);overlay=\(pausedForOverlay);ready=\(itemReady);failed=\(playbackFailed);gen=\(playbackGeneration);seekCallbacks=\(qaSeekEvents.callbacks);seekCommits=\(qaSeekEvents.commits);seekFinished=\(qaSeekEvents.lastFinished.map { String($0) } ?? "none");nativePosition=\(String(format: "%.3f", player?.currentTime().seconds ?? -1));timeStatus=\(player?.timeControlStatus.rawValue ?? -1)"
-                Text(state + seekState).font(.system(size: 1)).frame(width: 1, height: 1).opacity(0.01).allowsHitTesting(false)
-                    .accessibilityIdentifier("media.qa.player").accessibilityValue(state + seekState)
+                let nativeState = ";itemStatus=\(player?.currentItem?.status.rawValue ?? -1);itemErrorCode=\((player?.currentItem?.error as NSError?)?.code ?? 0);source=\(actualSourceKind.rawValue)"
+                Text(state + seekState + nativeState).font(.system(size: 1)).frame(width: 1, height: 1).opacity(0.01).allowsHitTesting(false)
+                    .accessibilityIdentifier("media.qa.player").accessibilityValue(state + seekState + nativeState)
             }
         }
         #endif
@@ -436,13 +464,39 @@ struct VideoSurface<Footer: View>: View {
             if value, let player, let item = player.currentItem { capturePosterFrame(player, item: item) }
         }
         .onChange(of: itemReady) { _, _ in recordMeasuredFirstFrame() }
+        .onChange(of: playerStatusEvent) { _, event in
+            guard let item = currentItem(matching: event) else { return }
+            itemReady = item.status == .readyToPlay
+            if item.status == .failed { handleFailure(item) }
+            updateBuffer(item)
+            if itemReady && !pausedForOverlay { applyResume(item) }
+        }
+        .onChange(of: playerReprepareEvent) { _, event in
+            guard active, currentItem(matching: event) != nil else { return }
+            playerReprepareEvent = nil
+            retirePlayer(); prepare()
+        }
+        .onChange(of: playerSyncEvent) { _, event in
+            guard currentItem(matching: event) != nil else { return }
+            syncPlayback(); onDisplayReady?(readyForDisplay && itemReady)
+        }
+        .onChange(of: duration) { _, _ in
+            if itemReady, !pausedForOverlay, let item = player?.currentItem { applyResume(item) }
+        }
+        .onChange(of: currentTime) { _, _ in observePlaybackProgress() }
+        .onChange(of: resumeInFlight) { _, value in
+            if value { syncPlayback() }
+        }
         .onChange(of: autoplay) { _, value in userIntent.reset(); if active { playing = value; syncPlayback() } }
         .onChange(of: pausedForOverlay) { _, value in
             syncPlayback()
             updatePreloadDemand()
             if value { stopPosterCapture() }
             else { posterCaptureTried = false; installPosterOutput() }
-            if !value, let item = player?.currentItem, item.status == .failed { handleFailure(item) }
+            if !value, let item = player?.currentItem {
+                if item.status == .failed { handleFailure(item) }
+                else if item.status == .readyToPlay { applyResume(item) }
+            }
         }
         .onDisappear { release() }
         .fullScreenCover(item: $compatibilityRequest, onDismiss: {
@@ -471,6 +525,11 @@ struct VideoSurface<Footer: View>: View {
             handleFailure(failed, notificationError: note.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? NSError)
         }
     }
+    private func currentItem(matching event: PlayerEventToken?) -> AVPlayerItem? {
+        guard let event, event.generation == playbackGeneration,
+              let item = player?.currentItem, ObjectIdentifier(item) == event.item else { return nil }
+        return item
+    }
     private func prepare() {
         guard active, !nativeRetrySuspended else { return }
         #if DEBUG && targetEnvironment(simulator)
@@ -483,7 +542,7 @@ struct VideoSurface<Footer: View>: View {
             playbackFailed = false; compatibilityAvailable = false; failureHandled = false; itemReady = false; readyForDisplay = false; waitingForData = true
             repairPlayingRecorded = false; repairFirstPosition = nil
             resumeApplied = false; resumeInFlight = false; onDisplayReady?(false)
-            currentTime = 0; duration = 0; bufferedEnd = 0; playing = userIntent.shouldPlay(autoplay: autoplay)
+            currentTime = 0; duration = 0; bufferedRanges = []; playing = userIntent.shouldPlay(autoplay: autoplay)
             let address = resolvedURL ?? url
             MediaCache.shared.pin(address); pinnedURL = address
             if repairedSource == nil && !bypassRepaired { repairedSource = MediaRepair.shared.cached(address, offline: diagnosticOffline) }
@@ -502,13 +561,14 @@ struct VideoSurface<Footer: View>: View {
             #if DEBUG && targetEnvironment(simulator)
             qaPlayerID = UUID(); qaCreationCount += 1
             #endif
+            let observedGeneration = playbackGeneration
             statusObserver = item.observe(\.status, options: [.initial, .new]) { item, _ in
                 Task { @MainActor in
-                    guard player?.currentItem === item else { return }
-                    itemReady = item.status == .readyToPlay
-                    if item.status == .failed { handleFailure(item) }
-                    updateBuffer(item)
-                    if itemReady { applyResume(item) }
+                    guard player?.currentItem === item, observedGeneration == playbackGeneration else { return }
+                    // Only publish identity-bound native state here. Playback
+                    // decisions belong to the current View, after overlay/focus
+                    // changes, rather than the View that installed this KVO.
+                    playerStatusEvent = .init(item: ObjectIdentifier(item), generation: observedGeneration)
                 }
             }
             playbackObserver = value.observe(\.timeControlStatus, options: [.initial, .new]) { value, _ in
@@ -533,19 +593,6 @@ struct VideoSurface<Footer: View>: View {
                 guard player === value else { return }
                 currentTime = time.seconds.isFinite ? max(0, time.seconds) : 0
                 updateBuffer(item)
-                capturePosterFrame(value, item: item)
-                if itemReady && !resumeInFlight && !pausedForOverlay && !playbackFailed {
-                    onProgress?(min(currentTime, duration), duration, false)
-                    if let repairedSource, active, readyForDisplay, !repairPlayingRecorded, value.timeControlStatus == .playing,
-                       let baseline = repairFirstPosition, currentTime > baseline + 0.05 {
-                        repairPlayingRecorded = true
-                        let context = PlaybackFailureDiagnostic(workID: diagnosticWorkID, source: diagnosticOffline ? .offline : .cache,
-                            requestedURL: resolvedURL ?? url, sourceURL: repairedSource.url, recoveryAttempted: true,
-                            error: nil, eventStatusCodes: [], repairMode: repairedSource.transcoded ? .transcode : .remux)
-                        LocalDiagnosticsStore.shared.note(area: .playback, code: .repairedVideoPlaying, playback: context)
-                    }
-                    if readyForDisplay && (repairFirstPosition == nil || currentTime < (repairFirstPosition ?? 0)) { repairFirstPosition = currentTime }
-                }
             }
         }
         syncPlayback()
@@ -677,7 +724,7 @@ struct VideoSurface<Footer: View>: View {
                 resumeInFlight = false; recoveryPosition = nil
                 if finished { currentTime = target }
                 else { LocalDiagnosticsStore.shared.note(area: .restore, code: .seekFailed) }
-                syncPlayback(); onDisplayReady?(readyForDisplay && itemReady)
+                playerSyncEvent = .init(item: ObjectIdentifier(item), generation: generation)
             }
         }
     }
@@ -690,17 +737,31 @@ struct VideoSurface<Footer: View>: View {
     private func updateBuffer(_ item: AVPlayerItem) {
         let seconds = item.duration.seconds
         duration = seconds.isFinite && seconds > 0 ? seconds : 0
-        let time = player?.currentTime().seconds ?? 0
-        bufferedEnd = item.loadedTimeRanges.map(\.timeRangeValue).filter {
-            let start = $0.start.seconds, end = CMTimeRangeGetEnd($0).seconds
-            return start.isFinite && end.isFinite && start <= time + 0.5 && end >= time
-        }.map { CMTimeRangeGetEnd($0).seconds }.max() ?? 0
+        bufferedRanges = item.loadedTimeRanges.map(\.timeRangeValue).compactMap { range in
+            let start = range.start.seconds, end = CMTimeRangeGetEnd(range).seconds
+            guard start.isFinite, end.isFinite, end > start else { return nil }
+            return SeekTimeRange(start: start, end: end)
+        }
         seekRanges = item.seekableTimeRanges.map(\.timeRangeValue).compactMap { value in
             let start = value.start.seconds, end = CMTimeRangeGetEnd(value).seconds
             guard start.isFinite, end.isFinite, start >= 0, end > start else { return nil }
             return SeekTimeRange(start: start, end: end)
         }
-        if itemReady && !resumeApplied { applyResume(item) }
+    }
+    private func observePlaybackProgress() {
+        guard active, let value = player, let item = value.currentItem else { return }
+        capturePosterFrame(value, item: item)
+        guard itemReady, !resumeInFlight, !pausedForOverlay, !playbackFailed else { return }
+        onProgress?(min(currentTime, duration), duration, false)
+        if let repairedSource, active, readyForDisplay, !repairPlayingRecorded, value.timeControlStatus == .playing,
+           let baseline = repairFirstPosition, currentTime > baseline + 0.05 {
+            repairPlayingRecorded = true
+            let context = PlaybackFailureDiagnostic(workID: diagnosticWorkID, source: diagnosticOffline ? .offline : .cache,
+                requestedURL: resolvedURL ?? url, sourceURL: repairedSource.url, recoveryAttempted: true,
+                error: nil, eventStatusCodes: [], repairMode: repairedSource.transcoded ? .transcode : .remux)
+            LocalDiagnosticsStore.shared.note(area: .playback, code: .repairedVideoPlaying, playback: context)
+        }
+        if readyForDisplay && (repairFirstPosition == nil || currentTime < (repairFirstPosition ?? 0)) { repairFirstPosition = currentTime }
     }
     private func release() {
         recoveryTask?.cancel(); recoveryTask = nil; playbackGeneration += 1
@@ -724,7 +785,7 @@ struct VideoSurface<Footer: View>: View {
         actualSourceURL = nil
         playing = false; itemReady = false; readyForDisplay = false; waitingForData = true
         resumeApplied = false; resumeInFlight = false
-        currentTime = 0; duration = 0; bufferedEnd = 0
+        currentTime = 0; duration = 0; bufferedRanges = []
         seekRanges = []
         holdingRate = false; seekingBase = nil; seekTarget = nil
         if let pinnedURL { MediaCache.shared.unpin(pinnedURL) }; pinnedURL = nil
@@ -768,16 +829,29 @@ struct VideoSurface<Footer: View>: View {
         if case .http(let status) = initial { LocalDiagnosticsStore.shared.note(area: .playback, code: .http, httpStatus: status, playback: diagnostic) }
         else { LocalDiagnosticsStore.shared.note(area: .playback, code: .playbackFailed, count: recoveryAttempted ? 1 : 0, playback: diagnostic) }
         let decision = VideoRecoveryPolicy.decide(failed: true, failure: initial, recoveryAttempted: recoveryAttempted)
-        if decision == .skip && !compatibilityAvailable { confirmUnavailable(); return }
+        if decision == .manualRetry {
+            recovering = false; repairStage = nil; repairProgress = nil
+            recoveryMessage = initial == .http(429) ? "请求较多，请稍后重试" : "登录状态需要确认，请重新登录后重试"
+            return
+        }
+        if decision == .skip { confirmUnavailable(); return }
         recovering = true; recoveryMessage = recoveryAttempted ? "正在确认播放状态…" : "正在更新播放地址并重试…"
         recoveryTask = Task {
             defer { if generation == playbackGeneration { recovering = false; repairStage = nil; repairProgress = nil; recoveryTask = nil } }
             if onImageContent != nil && (initial == .unknown || initial == .decoderMissing) {
                 // Some site "video" records actually deliver animated GIF/WebP.
                 // Probe only this failed, focused item with the image size bound.
-                if (try? await MediaCache.shared.imageResource(address)) != nil {
+                do {
+                    _ = try await MediaCache.shared.imageResource(address)
                     guard !Task.isCancelled, active, generation == playbackGeneration else { return }
                     onImageContent?(); return
+                } catch is CancellationError { return }
+                catch {
+                    guard !Task.isCancelled, active, generation == playbackGeneration else { return }
+                    if Self.blocksFailureAdvance(error) {
+                        recoveryMessage = error.localizedDescription
+                        return
+                    }
                 }
             }
             if compatibilityAvailable && automaticVideoRepair && !repairAttempted && !failedTranscoded {
@@ -792,7 +866,7 @@ struct VideoSurface<Footer: View>: View {
                     recoveryPosition = requestedResume ?? PlaybackResumePolicy.position(position: currentTime, duration: duration)
                     repairedSource = result
                     repairStage = nil; repairProgress = nil; recovering = false
-                    retirePlayer(); prepare()
+                    playerReprepareEvent = .init(item: ObjectIdentifier(item), generation: generation)
                     return
                 } catch is CancellationError { return }
                 catch {
@@ -807,6 +881,7 @@ struct VideoSurface<Footer: View>: View {
                         repairStage = nil; repairProgress = nil
                     } else {
                         recoveryMessage = (error as? MediaRepairError)?.errorDescription ?? "修复所需文件暂不可用，可重试或尝试兼容播放"
+                        if !Self.blocksFailureAdvance(error) { confirmUnavailable() }
                         return
                     }
                 }
@@ -818,19 +893,22 @@ struct VideoSurface<Footer: View>: View {
                     if let refreshURL { fresh = try await refreshURL() }
                     else { fresh = address }
                     guard !Task.isCancelled, active, generation == playbackGeneration else { return }
-                    // Missing metadata can also reflect access or tag coverage;
-                    // it does not prove that the video itself is terminal.
-                    guard let fresh else { recoveryMessage = "作品信息暂不可用，请稍后重试"; return }
+                    // A failed retry can move to another work without treating
+                    // missing metadata as proof that this work was deleted.
+                    guard let fresh else { confirmUnavailable(); return }
                     recoveryPosition = PlaybackResumePolicy.position(position: currentTime, duration: duration)
-                    recoveryAttempted = true; resolvedURL = fresh; retirePlayer(); prepare()
+                    recoveryAttempted = true; resolvedURL = fresh
+                    playerReprepareEvent = .init(item: ObjectIdentifier(item), generation: generation)
                 } catch {
-                    if generation == playbackGeneration { recoveryMessage = "连接或授权暂不可用，请稍后重试" }
+                    guard !Task.isCancelled, active, generation == playbackGeneration else { return }
+                    if Self.blocksFailureAdvance(error) { recoveryMessage = "连接或授权暂不可用，请稍后重试" }
+                    else { confirmUnavailable() }
                 }
             } else {
                 var failure = initial
                 if initial == .unknown, !address.isFileURL, let status = await Self.probeStatus(address) { failure = .http(status) }
                 guard !Task.isCancelled, active, generation == playbackGeneration else { return }
-                if VideoRecoveryPolicy.decide(failed: true, failure: failure, recoveryAttempted: true) == .skip && !compatibilityAvailable { confirmUnavailable() }
+                if VideoRecoveryPolicy.decide(failed: true, failure: failure, recoveryAttempted: true) == .skip { confirmUnavailable() }
                 else { recoveryMessage = "视频暂时无法播放，可稍后重试或手动划到下一条" }
             }
         }
@@ -874,8 +952,15 @@ struct VideoSurface<Footer: View>: View {
     }
     private func confirmUnavailable() {
         guard active, !pausedForOverlay else { return }
-        recovering = false; recoveryMessage = "该视频当前无法播放，可手动划到下一条"
+        recovering = false; recoveryMessage = "视频暂时无法播放"
         onConfirmedUnavailable?()
+    }
+    private static func blocksFailureAdvance(_ error: Error) -> Bool {
+        switch error {
+        case ClientError.signedOut, ClientError.accountChanged, ClientError.loadingSite: return true
+        case ClientError.http(let status), MediaDownloadError.http(let status): return status == 401 || status == 429
+        default: return false
+        }
     }
     private static func failure(_ item: AVPlayerItem, address: URL) -> VideoFailure {
         if address.isFileURL, !FileManager.default.fileExists(atPath: address.path) { return .localMissing }
@@ -948,7 +1033,7 @@ struct VideoSurface<Footer: View>: View {
                     else { LocalDiagnosticsStore.shared.note(area: .playback, code: .seekFailed) }
                 }
                 else { LocalDiagnosticsStore.shared.note(area: .playback, code: .seekFailed) }
-                syncPlayback()
+                playerSyncEvent = .init(item: ObjectIdentifier(item), generation: generation)
             }
         }
         // An interactive jump must not wait for a seek completion before accepting

@@ -504,6 +504,8 @@ import Foundation
         let retainedIDs = retainModel.feed.items.map(\.id)
         let retainedContinuation = retainModel.feed.continuationSnapshot(windowIDs: retainedIDs, capturedAt: Date(timeIntervalSince1970: 1234))
         let retainedRevision = retainModel.queueRevision
+        check(retainModel.resumeCandidate?.focusedID == restartCheckpoint.focusedID,
+              "Refresh preservation fixture begins with an actionable past checkpoint")
         retainSession.pageError = URLError(.timedOut)
         await retainModel.restartFromStart(session: retainSession)
         let retainedContinuationAfterFailure = retainModel.feed.continuationSnapshot(windowIDs: retainedIDs, capturedAt: Date(timeIntervalSince1970: 1234))
@@ -512,6 +514,8 @@ import Foundation
               "Failed restart retains exact old rows, focus, continuation and queue revision")
         check(retainModel.messageIsError && retainModel.notice?.recovery == .restartFromStart,
               "Failed restart exposes a retryable error notice")
+        check(retainModel.resumeCandidate?.focusedID == restartCheckpoint.focusedID && retainModel.promptRevision == 0,
+              "A failed refresh cannot persist a dismissal for the saved resume offer")
         let retainedRequestsAfterFailure = retainSession.pageRequests.count
         await retainModel.nextAutomatically(session: retainSession)
         check(retainSession.pageRequests.count == retainedRequestsAfterFailure && retainModel.focused == 112 &&
@@ -522,10 +526,15 @@ import Foundation
         await retainModel.restartFromStart(session: retainSession)
         check(retainSession.pageRequests.count == retainedRequestsAfterFailure && retainModel.pagingMode.isWaitingForExplicitAction,
               "Model refresh attempts during staged cooldown send no repeated HTTP requests")
+        check(retainModel.resumeCandidate?.focusedID == restartCheckpoint.focusedID && retainModel.promptRevision == 0,
+              "Refresh cooldown cannot consume the resume offer")
         retainClock = retainClock.addingTimeInterval(60)
         await retainModel.restartFromStart(session: retainSession)
         check(retainModel.feed.items.map(\.id) == [113] && retainModel.focused == 113 && retainModel.queueRevision == retainedRevision + 1,
               "Retry after failure commits a fresh first page; got ids=\(retainModel.feed.items.map(\.id)) focus=\(String(describing: retainModel.focused)) revision=\(retainModel.queueRevision) state=\(retainModel.restoreState) cursors=\(retainSession.pageRequests.map(\.cursor))")
+
+        check(retainModel.resumeCandidate?.focusedID == restartCheckpoint.focusedID && retainModel.promptRevision == 0,
+              "A successful refreshed queue keeps the prior resume action available")
 
         // UI double taps are coalesced while the production request is gated;
         // both calls share one upstream first-page request and the waiter still

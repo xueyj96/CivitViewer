@@ -1,0 +1,111 @@
+{
+  "version": "0.3.0",
+  "build": 64,
+  "verified_at_utc": "2026-10-29T19:18:13.397515+00:00",
+  "stage": "LOCAL_REVIEW_BUILD_READY",
+  "base_frozen_build": 63,
+  "base_git_commit": "f3013e3201fdd4bfb4a112a4b8b9ba9e2ec25ffa",
+  "source_sha256": "a07d1c6bb1a05c6c0662a35883331111495db1b3a1b79b442ef0ef052905f47d",
+  "source_committed": false,
+  "source_pushed": false,
+  "installed": false,
+  "published": false,
+  "current_phone_build_at_local_validation": 63,
+  "public_release_build": 60,
+  "scope": "Defer native queue application through tracking/dragging/deceleration, including a tail bounce without willTransition; keep future preloading quiet",
+  "local_before_evidence": {
+    "source": "Recorded actual synthetic UIKit tail drag and actual production append path",
+    "raw_test_log_sha256": "86d1d02bd7e9e4aa2655c88d33594d2355bc0c3235a6b61034f086a11f3017cd",
+    "old_pager_behavior_only_debug_observation_added": true,
+    "refreshes": 5,
+    "refreshes_while_moving": 1,
+    "critical": [
+      {
+        "event": "native.beforeNeighborRefresh",
+        "sequence": 146,
+        "offsetY": 1045.6666666666667,
+        "viewportHeight": 778,
+        "dragging": true,
+        "transitionActive": false
+      }
+    ],
+    "settled_height_test": "Passed; persistent black page not reproduced",
+    "next_event": "Native pan cancelled immediately after queue refresh",
+    "real_site_requests": 0,
+    "silent_local_video": true
+  },
+  "local_after_evidence": {
+    "raw_final_log_sha256": "42182a49df21932fbd688096529a7653cc53b33b0d5474dadac4bac5320f2644",
+    "target_tail_response_deferred_while_dragging": 3,
+    "native_neighbor_resets_while_moving": 0,
+    "event_count": 218,
+    "final_current": {
+      "currentID": 64000102,
+      "displayedIDs": [
+        64000102
+      ],
+      "offset": {
+        "x": 0,
+        "y": 778
+      },
+      "bounds": {
+        "height": 778,
+        "width": 402,
+        "x": 0,
+        "y": 778
+      },
+      "dragging": false,
+      "decelerating": false,
+      "transitionActive": false
+    },
+    "source_sha256": "a07d1c6bb1a05c6c0662a35883331111495db1b3a1b79b442ef0ef052905f47d"
+  },
+  "local_validation": {
+    "final_ui_passed": 6,
+    "final_ui_failed": 0,
+    "production_source_sha256": "a07d1c6bb1a05c6c0662a35883331111495db1b3a1b79b442ef0ef052905f47d",
+    "cases": [
+      "Sparse >120s metadata, hot/day filter, native tail bounce and repeated page appends",
+      "Actual delayed tail response during a slow held drag; require exact tailID and incoming count",
+      "Original44percent drag cancellation, with and without passive trace",
+      "Six-upcoming sparse fill preserves actual player identity/progress and silent preload",
+      "Existing empty-view clear then actual close",
+      "Timeline resume viewport, details, navigation and rotation"
+    ],
+    "long_video_fixture_limit": "181-second metadata with validated short silent local bytes; not a real long-video playback benchmark",
+    "real_site_requests": 0,
+    "neutral_silent_local_fixtures_only": true,
+    "review_open_material_findings": 0
+  },
+  "runtime_tradeoff": "New neighbors reach native paging once current drag/bounce finishes; existing model/media preloading continues; latest pending only, one50ms waiter cancelled on dismantle",
+  "local_ipa": {
+    "bundle_identifier": "com.xueyj.civitviewer",
+    "version": "0.3.0",
+    "build": "64",
+    "minimum_ios": "17.0",
+    "platforms": [
+      "iPhoneOS"
+    ],
+    "ipa_filename": "CivitViewer-0.3.0-build64-sideload.ipa",
+    "ipa_bytes": 6285219,
+    "ipa_sha256": "18b0252ac4b2cd9f8b2d7611fe0a8055caa54418fdef263d344c1f948b640f91",
+    "packaged_regular_files": 11,
+    "macho_binaries_checked": 2,
+    "personal_provisioning_profiles": 0,
+    "personal_certificate_signatures": 0,
+    "personal_signing_entitlements": 0,
+    "local_checksum_signatures": "ad-hoc, must be replaced by recipient signing",
+    "deep_strict_codesign_passed": true,
+    "ipa_crc_and_file_hashes_passed": true,
+    "main_executable_has_no_coverage_sections": true,
+    "original_input_app_unchanged": true,
+    "recipient_resigning_required": true,
+    "device_install_after_recipient_resigning": "NOT_TESTED"
+  },
+  "limitations": [
+    "Original user phone persistent black-page cause not uniquely reproduced",
+    "No64 phone UI replay at local freeze",
+    "No real-site latency/long-video measurement",
+    "No commit/push/publication"
+  ]
+}

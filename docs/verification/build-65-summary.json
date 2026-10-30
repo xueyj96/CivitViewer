@@ -1,0 +1,101 @@
+{
+  "version": "0.3.0",
+  "build": 65,
+  "verified_at_utc": "2026-10-29T20:35:01.352970+00:00",
+  "stage": "LOCAL_REVIEW_BUILD_READY",
+  "base_frozen_build": 64,
+  "base_git_commit": "f3013e3201fdd4bfb4a112a4b8b9ba9e2ec25ffa",
+  "source_sha256": "bba6d57452375136712d1146120363fe6fdbee8b5228cb357195c562ae79364d",
+  "source_committed": false,
+  "source_pushed": false,
+  "installed": false,
+  "published": false,
+  "current_phone_build_at_local_validation": 64,
+  "public_release_build": 60,
+  "scope": "Loaded-list tail with no next work stays on current host; explicit swipe requests data instead of entering an empty native slot",
+  "design": [
+    "Separate out-of-list forward input from native page transitions; valid neighbors keep original native paging",
+    "One scroll-owned UIPan gate is an explicit failure prerequisite of original native pan; no native scroll delegate replacement or raw offset/bounce mutation",
+    "Gate activity retains64 motion-safe pending apply; actual arrival cannot reset queue during a held gate",
+    "Small passive medium-Dynamic-Type spinner only after explicit boundary demand while actual continuation isLoading; background preloading quiet",
+    "Keep current video/player; arrival requires a fresh swipe under the stated manual-continuation assumption"
+  ],
+  "local_validation": {
+    "final_ui_passed": 8,
+    "final_ui_failed": 0,
+    "source_sha256": "bba6d57452375136712d1146120363fe6fdbee8b5228cb357195c562ae79364d",
+    "cases": [
+      "Same binary disabled-gate positive empty-region control",
+      "Enabled waiting-tail original host remains in viewport and next/back after arrival",
+      "320pt A2 landscape spinner bounded and no author/seek overlap",
+      "Ended tail preserves original native bounce policy before next touch and reverses normally",
+      "Delayed response during tail gesture does not reset queue in motion",
+      "Original44percent available-neighbor gesture unchanged",
+      "Same-binary gate-disabled44percent baseline control unchanged",
+      "Quiet six-upcoming fill preserves actual player identity/progress"
+    ],
+    "real_site_requests": 0,
+    "long_video_fixture_limit": "181s metadata with validated short silent local bytes; not long-video performance measurement",
+    "review_open_material_findings": 0
+  },
+  "behavior_evidence": {
+    "at_utc": "2026-10-29T20:35:01.352970+00:00",
+    "source_sha256": "bba6d57452375136712d1146120363fe6fdbee8b5228cb357195c562ae79364d",
+    "oracle": "Actual displayed host frame relative to viewport; not private raw contentOffset",
+    "same_debug_binary_control_and_enabled_samples": [
+      {
+        "test": "testNative65BoundarySpinnerStaysSmallInCompactLargeLandscape",
+        "actual_host_exposed_height_pt": -0.0
+      },
+      {
+        "test": "testNative65DisabledGateShowsActualEmptySlotControl",
+        "actual_host_exposed_height_pt": 189.33333333333337
+      },
+      {
+        "test": "testNative65WaitingTailNeverExposesEmptyPageAndNextWorksAfterArrival",
+        "actual_host_exposed_height_pt": -0.0
+      }
+    ],
+    "motion_safe_native_neighbor_resets": 3,
+    "native_resets_during_active_motion": 0,
+    "local_data_only": true,
+    "muted_audio_free_fixture": true
+  },
+  "prior_failures": {
+    "raw64_displacement_proxy_pt": 189.33333333333337,
+    "global_bounce_false": "Rejected: changed44percent gesture",
+    "mid_gesture_bounce_toggle": "Rejected: could enter virtual slot despite false policy",
+    "measurement_correction": "Final visual oracle uses actual displayed frame plus same-binary control",
+    "small_glyph_assertion": "Initial exact20pt assertion rejected a13.333pt glyph; final positive bounded glyph check preserves no-overlap and actual playback checks",
+    "failed_driver_artifacts": "Completed failing test logs preserved; some xcresults never finalized and remain incomplete, not successes"
+  },
+  "local_ipa": {
+    "bundle_identifier": "com.xueyj.civitviewer",
+    "version": "0.3.0",
+    "build": "65",
+    "minimum_ios": "17.0",
+    "platforms": [
+      "iPhoneOS"
+    ],
+    "ipa_filename": "CivitViewer-0.3.0-build65-sideload.ipa",
+    "ipa_bytes": 6291979,
+    "ipa_sha256": "8aad44e5d662146a469cb809f090cb41c305453136ebf4026d0ecc9f9dfe7c2b",
+    "packaged_regular_files": 11,
+    "macho_binaries_checked": 2,
+    "personal_provisioning_profiles": 0,
+    "personal_certificate_signatures": 0,
+    "personal_signing_entitlements": 0,
+    "local_checksum_signatures": "ad-hoc, must be replaced by recipient signing",
+    "deep_strict_codesign_passed": true,
+    "ipa_crc_and_file_hashes_passed": true,
+    "main_executable_has_no_coverage_sections": true,
+    "original_input_app_unchanged": true,
+    "recipient_resigning_required": true,
+    "device_install_after_recipient_resigning": "NOT_TESTED"
+  },
+  "limitations": [
+    "No65 physical UI replay at local freeze",
+    "No real-site throughput or latency benchmark",
+    "No commit/push/GitHub publication"
+  ]
+}

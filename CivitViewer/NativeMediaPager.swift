@@ -14,6 +14,10 @@ struct NativeMediaPager: View {
     var isVisible = true
     var onUserPageSettled: ((Int) -> Void)? = nil
     var onUserContinuationDemand: ((Int) -> Void)? = nil
+    var onUserBoundaryDemand: ((Int) -> Void)? = nil
+    var boundaryWaiting = false
+    var onUserBoundaryCancel: (() -> Void)? = nil
+    var onPageDisplayed: ((Int) -> Void)? = nil
     let renderPage: (Int, Bool) -> AnyView
     #if DEBUG && targetEnvironment(simulator)
     @StateObject private var frames = NativePagerFrameBridge()
@@ -23,14 +27,14 @@ struct NativeMediaPager: View {
         #if DEBUG && targetEnvironment(simulator)
         NativeMediaPagerController(ids: ids, focused: $focused, initialID: initialID, focusRequest: focusRequest,
             queueRevision: queueRevision, viewport: viewport, accessibilityIdentifier: accessibilityIdentifier,
-            isVisible: isVisible, onUserPageSettled: onUserPageSettled, onUserContinuationDemand: onUserContinuationDemand, renderPage: renderPage, frames: frames)
+            isVisible: isVisible, onUserPageSettled: onUserPageSettled, onUserContinuationDemand: onUserContinuationDemand, onUserBoundaryDemand: onUserBoundaryDemand, boundaryWaiting: boundaryWaiting, onUserBoundaryCancel: onUserBoundaryCancel, onPageDisplayed: onPageDisplayed, renderPage: renderPage, frames: frames)
             .preference(key: CollectionPagingQAFrameKey.self, value: frames.collection)
             .preference(key: ResumePromptQAFrameKey.self, value: frames.resume)
             .preference(key: PlaybackLayoutQAFrameKey.self, value: frames.playback)
         #else
         NativeMediaPagerController(ids: ids, focused: $focused, initialID: initialID, focusRequest: focusRequest,
             queueRevision: queueRevision, viewport: viewport, accessibilityIdentifier: accessibilityIdentifier,
-            isVisible: isVisible, onUserPageSettled: onUserPageSettled, onUserContinuationDemand: onUserContinuationDemand, renderPage: renderPage)
+            isVisible: isVisible, onUserPageSettled: onUserPageSettled, onUserContinuationDemand: onUserContinuationDemand, onUserBoundaryDemand: onUserBoundaryDemand, boundaryWaiting: boundaryWaiting, onUserBoundaryCancel: onUserBoundaryCancel, onPageDisplayed: onPageDisplayed, renderPage: renderPage)
         #endif
     }
 }
@@ -46,6 +50,10 @@ private struct NativeMediaPagerController: UIViewControllerRepresentable {
     var isVisible = true
     var onUserPageSettled: ((Int) -> Void)? = nil
     var onUserContinuationDemand: ((Int) -> Void)? = nil
+    var onUserBoundaryDemand: ((Int) -> Void)? = nil
+    var boundaryWaiting = false
+    var onUserBoundaryCancel: (() -> Void)? = nil
+    var onPageDisplayed: ((Int) -> Void)? = nil
     let renderPage: (Int, Bool) -> AnyView
     #if DEBUG && targetEnvironment(simulator)
     let frames: NativePagerFrameBridge
@@ -67,7 +75,7 @@ private struct NativeMediaPagerController: UIViewControllerRepresentable {
         coordinator.dismantle()
     }
 
-    final class Coordinator: NSObject, UIPageViewControllerDataSource, UIPageViewControllerDelegate {
+    final class Coordinator: NSObject, UIPageViewControllerDataSource, UIPageViewControllerDelegate, UIGestureRecognizerDelegate {
         struct PageKey: Hashable { let id: Int; let revision: Int }
         struct Transition {
             let focused: Int?
@@ -84,10 +92,12 @@ private struct NativeMediaPagerController: UIViewControllerRepresentable {
         private var currentID: Int?
         private var transition: Transition?
         private var pending: NativeMediaPagerController?
+        private var pendingApplyTask: Task<Void, Never>?
         private var generation = 0
         private var isVisible = true
         private var activeAccessibilityIdentifier = ""
         private weak var observedBoundaryPan: UIPanGestureRecognizer?
+        private var boundaryGate: UIPanGestureRecognizer?
         #if DEBUG && targetEnvironment(simulator)
         private let debugInstanceID = UUID().uuidString
         private var debugLastState: Data?
@@ -117,14 +127,52 @@ private struct NativeMediaPagerController: UIViewControllerRepresentable {
             #if DEBUG && targetEnvironment(simulator)
             debugSnapshot(event: "receive")
             #endif
-            if transition != nil {
+            // Dragging beyond the last page has no willTransition callback.
+            // Replacing its neighbors while that drag/bounce still owns the
+            // scroll offset cancels the gesture. Defer native queue changes
+            // through both native transitions and boundary scrolling.
+            if transition != nil || nativeScrollIsMoving {
+                #if DEBUG && targetEnvironment(simulator)
+                if pending?.ids != value.ids { touchTrace?.record("native.deferQueue", ["incomingCount": value.ids.count]) }
+                #endif
                 pending = value
                 // Updating SwiftUI state is safe during a native transition; replacing
                 // UIPageViewController's controller list is deferred until it settles.
                 refreshHosts(using: value)
+                schedulePendingApply()
                 return
             }
+            cancelPendingApply()
+            pending = nil
             apply(value)
+        }
+
+        private var nativeScrollIsMoving: Bool {
+            guard let scroll = controller?.viewIfLoaded?.subviews.compactMap({ $0 as? UIScrollView }).first else { return false }
+            return boundaryGate?.state == .began || boundaryGate?.state == .changed ||
+                scroll.isTracking || scroll.isDragging || scroll.isDecelerating ||
+                scroll.panGestureRecognizer.state == .began || scroll.panGestureRecognizer.state == .changed
+        }
+
+        private func cancelPendingApply() {
+            pendingApplyTask?.cancel()
+            pendingApplyTask = nil
+        }
+
+        /// One cancellable waiter owns only the latest configuration. Native
+        /// transition completion still settles focus; this handles tail bounce,
+        /// which does not produce a page-controller transition callback.
+        private func schedulePendingApply() {
+            guard pending != nil, transition == nil, pendingApplyTask == nil else { return }
+            pendingApplyTask = Task { @MainActor [weak self] in
+                do { try await Task.sleep(for: .milliseconds(50)) } catch { return }
+                guard !Task.isCancelled, let self else { return }
+                self.pendingApplyTask = nil
+                guard self.transition == nil, let latest = self.pending else { return }
+                if self.nativeScrollIsMoving { self.schedulePendingApply(); return }
+                self.pending = nil
+                self.apply(latest)
+            }
         }
 
         private func apply(_ value: NativeMediaPagerController, settledID: Int? = nil) {
@@ -148,6 +196,9 @@ private struct NativeMediaPagerController: UIViewControllerRepresentable {
                     // Append/filter/reorder around the same displayed host only
                     // refreshes neighbor ordering. Keep its parent and appearance
                     // lifecycle intact so active playback does not release/reprepare.
+                    #if DEBUG && targetEnvironment(simulator)
+                    touchTrace?.record("native.beforeNeighborRefresh", ["queueCount": ids.count])
+                    #endif
                     controller.dataSource = nil
                     controller.dataSource = self
                     controller.setViewControllers([host], direction: .forward, animated: false)
@@ -164,12 +215,15 @@ private struct NativeMediaPagerController: UIViewControllerRepresentable {
             configureScrollView()
             publishFocus(target)
             layoutChanged()
+            notifyDisplayed(target)
             #if DEBUG && targetEnvironment(simulator)
             debugSnapshot(event: "apply")
             #endif
         }
 
         private func removeNativeQueue() {
+            if let boundaryGate { boundaryGate.view?.removeGestureRecognizer(boundaryGate) }
+            boundaryGate = nil
             observedBoundaryPan?.removeTarget(self, action: #selector(boundaryPanEnded(_:)))
             observedBoundaryPan = nil
             container?.removePageController(preservingHosts: Array(hosts.values))
@@ -210,6 +264,7 @@ private struct NativeMediaPagerController: UIViewControllerRepresentable {
         }
 
         func dismantle() {
+            cancelPendingApply()
             transition = nil; pending = nil
             removeNativeQueue()
             hosts.removeAll()
@@ -226,6 +281,17 @@ private struct NativeMediaPagerController: UIViewControllerRepresentable {
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.generation == expectedGeneration, self.currentID == id, self.transition == nil else { return }
                 self.configuration.focused = id
+            }
+        }
+
+        private func notifyDisplayed(_ id: Int?) {
+            guard let id else { return }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.isVisible, self.transition == nil, !self.nativeScrollIsMoving,
+                      self.currentID == id,
+                      let host = self.controller?.viewControllers?.first as? NativePageHost,
+                      host.id == id, host.viewIfLoaded?.window != nil else { return }
+                self.configuration.onPageDisplayed?(id)
             }
         }
 
@@ -246,6 +312,8 @@ private struct NativeMediaPagerController: UIViewControllerRepresentable {
             let host = NativePageHost(id: id, rootView: content(for: id, using: configuration))
             host.view.backgroundColor = .black
             host.view.clipsToBounds = true
+            host.view.accessibilityElementsHidden = configuration.boundaryWaiting
+            host.view.isUserInteractionEnabled = !configuration.boundaryWaiting
             // The parent GeometryReader has already selected the safe-area viewport.
             // A nested hosting root must not subtract those insets a second time.
             host.safeAreaRegions = []
@@ -258,6 +326,10 @@ private struct NativeMediaPagerController: UIViewControllerRepresentable {
 
         private func refreshHosts(using value: NativeMediaPagerController) {
             for (key, host) in hosts where value.ids.contains(key.id) {
+                // UIKit owns this hosting root. Suppress its old controls at the
+                // native boundary as well as inside the SwiftUI waiting canvas.
+                host.view.accessibilityElementsHidden = value.boundaryWaiting
+                host.view.isUserInteractionEnabled = !value.boundaryWaiting
                 host.rootView = content(for: key.id, using: value)
             }
         }
@@ -277,10 +349,31 @@ private struct NativeMediaPagerController: UIViewControllerRepresentable {
         private func configureScrollView() {
             guard let scroll = controller?.view.subviews.compactMap({ $0 as? UIScrollView }).first else { return }
             if observedBoundaryPan !== scroll.panGestureRecognizer {
+                if let boundaryGate { boundaryGate.view?.removeGestureRecognizer(boundaryGate) }
+                boundaryGate = nil
                 observedBoundaryPan?.removeTarget(self, action: #selector(boundaryPanEnded(_:)))
                 observedBoundaryPan = scroll.panGestureRecognizer
                 scroll.panGestureRecognizer.addTarget(self, action: #selector(boundaryPanEnded(_:)))
+                #if DEBUG && targetEnvironment(simulator)
+                let installGate = !ProcessInfo.processInfo.arguments.contains("--qa-disable-boundary-gate65")
+                #else
+                let installGate = true
+                #endif
+                if installGate {
+                    let gate = UIPanGestureRecognizer(target: self, action: #selector(boundaryGateEnded(_:)))
+                    gate.isEnabled = isVisible && transition == nil && currentID != nil && currentID == ids.last
+                    gate.delegate = self
+                    gate.maximumNumberOfTouches = 1
+                    gate.cancelsTouchesInView = false
+                    gate.delaysTouchesBegan = false
+                    gate.delaysTouchesEnded = false
+                    scroll.addGestureRecognizer(gate)
+                    scroll.panGestureRecognizer.require(toFail: gate)
+                    boundaryGate = gate
+                }
             }
+            let gateEnabled = isVisible && transition == nil && currentID != nil && currentID == ids.last
+            if let boundaryGate, boundaryGate.isEnabled != gateEnabled { boundaryGate.isEnabled = gateEnabled }
             scroll.contentInsetAdjustmentBehavior = .never
             scroll.contentInset = .zero
             scroll.scrollIndicatorInsets = .zero
@@ -296,7 +389,7 @@ private struct NativeMediaPagerController: UIViewControllerRepresentable {
                     let trace = PagerGestureTraceQA()
                     trace.nativeState = { [weak self] in
                         guard let self else { return [:] }
-                        return ["instance": self.debugInstanceID,
+                        var value: [String: Any] = ["instance": self.debugInstanceID,
                             "currentID": self.currentID as Any? ?? NSNull(),
                             "focused": self.configuration.focused as Any? ?? NSNull(),
                             "displayedIDs": (self.controller?.viewControllers ?? []).compactMap { ($0 as? NativePageHost)?.id },
@@ -304,7 +397,14 @@ private struct NativeMediaPagerController: UIViewControllerRepresentable {
                             "queueRevision": self.configuration.queueRevision,
                             "focusRequest": self.configuration.focusRequest,
                             "transitionActive": self.transition != nil,
-                            "pendingFocused": self.pending?.focused as Any? ?? NSNull()]
+                            "pendingFocused": self.pending?.focused as Any? ?? NSNull(),
+                            "latestBoundaryWaiting": (self.pending ?? self.configuration).boundaryWaiting,
+                            "boundaryGateActive": self.boundaryGate?.state == .began || self.boundaryGate?.state == .changed]
+                        if let view = self.controller?.viewControllers?.first?.viewIfLoaded, let container = self.container {
+                            let rect = view.convert(view.bounds, to: container.view)
+                            value["displayedRelativeFrame"] = ["x": Double(rect.minX), "y": Double(rect.minY), "width": Double(rect.width), "height": Double(rect.height)]
+                        }
+                        return value
                     }
                     touchTrace = trace
                 }
@@ -313,16 +413,54 @@ private struct NativeMediaPagerController: UIViewControllerRepresentable {
             #endif
         }
 
+        func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
+            guard recognizer === boundaryGate, let pan = recognizer as? UIPanGestureRecognizer else { return false }
+            let velocity = pan.velocity(in: pan.view)
+            return isVisible && transition == nil && currentID != nil && currentID == ids.last &&
+                (velocity.y < 0 || (configuration.boundaryWaiting && velocity.y > 0)) &&
+                abs(velocity.y) > abs(velocity.x)
+        }
+
+        func gestureRecognizer(_ recognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            guard recognizer === boundaryGate, isVisible, transition == nil,
+                  currentID != nil, currentID == ids.last else { return false }
+            var target = touch.view
+            while let view = target {
+                if view is UIControl { return false }
+                target = view.superview
+            }
+            return true
+        }
+
+        @objc private func boundaryGateEnded(_ pan: UIPanGestureRecognizer) {
+            #if DEBUG && targetEnvironment(simulator)
+            touchTrace?.record("native.boundaryGate", ["state": pan.state.rawValue],
+                sampleKey: pan.state == .changed ? "native.boundaryGate.changed" : nil)
+            #endif
+            guard pan === boundaryGate, pan.state == .ended else { return }
+            requestBoundaryContinuation(pan)
+        }
+
         /// A real upward swipe at the last page is demand, even when there is no
         /// neighbor to settle on. Never infer demand from layout or programmatic focus.
         @objc private func boundaryPanEnded(_ pan: UIPanGestureRecognizer) {
             #if DEBUG && targetEnvironment(simulator)
             touchTrace?.pan(pan)
             #endif
-            guard pan.state == .ended, isVisible, transition == nil,
+            guard pan.state == .ended else { return }
+            requestBoundaryContinuation(pan)
+        }
+
+        private func requestBoundaryContinuation(_ pan: UIPanGestureRecognizer) {
+            guard isVisible, transition == nil,
                   let currentID, currentID == ids.last else { return }
             let delta = pan.translation(in: pan.view)
+            if configuration.boundaryWaiting, delta.y > 36, abs(delta.y) > abs(delta.x) * 1.2 {
+                configuration.onUserBoundaryCancel?()
+                return
+            }
             guard delta.y < -36, abs(delta.y) > abs(delta.x) * 1.2 else { return }
+            configuration.onUserBoundaryDemand?(currentID)
             configuration.onUserContinuationDemand?(currentID)
         }
 
@@ -340,7 +478,7 @@ private struct NativeMediaPagerController: UIViewControllerRepresentable {
         /// Only the opt-in, synthetic resume QA route writes these native snapshots.
         /// Coalesce to 20 Hz and compare state without timestamp/event metadata.
         private func debugSnapshot(event: String) {
-            guard ResumePromptQA.enabled else { return }
+            guard ResumePromptQA.enabled || ProcessInfo.processInfo.arguments.contains("--qa-native-layout64") else { return }
             debugLastEvent = event
             guard debugSnapshotWork == nil else { return }
             let delay = max(0, 0.05 - (CACurrentMediaTime() - debugLastWrite))
@@ -354,7 +492,7 @@ private struct NativeMediaPagerController: UIViewControllerRepresentable {
         }
 
         private func debugNavigationOperation(_ operation: String, target: Int) {
-            guard ResumePromptQA.enabled else { return }
+            guard ResumePromptQA.enabled || ProcessInfo.processInfo.arguments.contains("--qa-native-layout64") else { return }
             let scroll = controller?.viewIfLoaded?.subviews.compactMap { $0 as? UIScrollView }.first
             let displayed = controller?.viewControllers?.first as? NativePageHost
             let record: [String: Any] = [
@@ -396,7 +534,7 @@ private struct NativeMediaPagerController: UIViewControllerRepresentable {
             ] as [String: Any]
         }
         private func writeDebugSnapshot() {
-            guard ResumePromptQA.enabled else { return }
+            guard ResumePromptQA.enabled || ProcessInfo.processInfo.arguments.contains("--qa-native-layout64") else { return }
             let nativeView = controller?.viewIfLoaded
             let scroll = nativeView?.subviews.compactMap { $0 as? UIScrollView }.first
             var ancestors: [Any] = []
@@ -503,6 +641,7 @@ private struct NativeMediaPagerController: UIViewControllerRepresentable {
             let settled = (completed ? displayedID : (previousViewControllers.first as? NativePageHost)?.id) ?? currentID
             currentID = settled
             transition = nil
+            cancelPendingApply()
             let latest = pending ?? configuration
             pending = nil
             let redirected = latest.focused != started.focused || latest.focusRequest != started.request || latest.queueRevision != started.revision
@@ -519,7 +658,13 @@ private struct NativeMediaPagerController: UIViewControllerRepresentable {
                     }
                 }
             }
-            apply(latest, settledID: redirected ? nil : settled)
+            if nativeScrollIsMoving {
+                pending = latest
+                refreshHosts(using: latest)
+                schedulePendingApply()
+            } else {
+                apply(latest, settledID: redirected ? nil : settled)
+            }
             #if DEBUG && targetEnvironment(simulator)
             touchTrace?.record("native.didSettle", ["redirected": redirected, "settled": settled as Any? ?? NSNull()])
             #endif

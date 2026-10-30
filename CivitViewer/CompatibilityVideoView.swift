@@ -39,6 +39,7 @@ struct CompatibilityVideoView: View {
             Color.black.ignoresSafeArea()
             CompatibilityWebView(controller: controller)
                 .ignoresSafeArea(edges: .bottom)
+            VideoWaitingIndicator(visible: controller.isLoading && controller.errorCode == nil && scenePhase == .active)
             VStack(spacing: 0) {
                 HStack {
                     Text("兼容播放")
@@ -63,12 +64,6 @@ struct CompatibilityVideoView: View {
                         .foregroundStyle(.white)
                         .padding(12)
                         .background(.black.opacity(0.78), in: Capsule())
-                        .padding(.bottom, 24)
-                } else if controller.isLoading {
-                    ProgressView()
-                        .tint(.white)
-                        .padding(14)
-                        .background(.black.opacity(0.55), in: Circle())
                         .padding(.bottom, 24)
                 }
             }

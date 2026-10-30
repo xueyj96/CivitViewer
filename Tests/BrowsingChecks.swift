@@ -118,14 +118,16 @@ import Foundation
         let failureCases: [VideoFailure] = [.http(404), .http(410), .http(403), .http(401), .http(429), .http(500), .network, .unknown, .decoderMissing, .localMissing]
         check(failureCases.allSatisfy { VideoRecoveryPolicy.decide(failed: false, failure: $0, recoveryAttempted: true) == .wait }, "Loading and buffering never skip, regardless of elapsed time")
         check(VideoRecoveryPolicy.decide(failed: true, failure: .http(404), recoveryAttempted: false) == .recover, "First 404 gets fresh-address recovery")
-        check([VideoFailure.http(404), .http(410), .decoderMissing].allSatisfy { VideoRecoveryPolicy.decide(failed: true, failure: $0, recoveryAttempted: true) == .skip }, "Only confirmed terminal remote failures skip after recovery")
-        check([VideoFailure.http(403), .http(401), .http(429), .http(500), .network, .unknown].allSatisfy { VideoRecoveryPolicy.decide(failed: true, failure: $0, recoveryAttempted: true) == .manualRetry }, "Access/rate/network/server/unknown errors do not skip")
+        check([VideoFailure.http(404), .http(410), .http(403), .http(500), .decoderMissing, .network, .unknown].allSatisfy { VideoRecoveryPolicy.decide(failed: true, failure: $0, recoveryAttempted: true) == .skip }, "A confirmed failed retry may try the next work without declaring this one permanently absent")
+        check([VideoFailure.http(401), .http(429)].allSatisfy { failure in
+            [false, true].allSatisfy { VideoRecoveryPolicy.decide(failed: true, failure: failure, recoveryAttempted: $0) == .manualRetry }
+        }, "Authentication and rate limits stop without a retry or skip storm")
         check(VideoRecoveryPolicy.decide(failed: true, failure: .localMissing, recoveryAttempted: false) == .skip, "Actually missing local file is terminal without deletion")
         var advance = PlaybackAdvanceState()
         check(advance.target(failedID: 1, focused: 2, ids: [1,2,3], active: true) == nil && advance.target(failedID: 1, focused: 1, ids: [1,2,3], active: false) == nil, "Inactive/stale failure never moves current page")
         let ids = Array(1...9)
-        for id in 1...6 { check(advance.target(failedID: id, focused: id, ids: ids, active: true) == id + 1, "Terminal failure advances once to next item"); advance.focusChanged(id + 1) }
-        check(advance.target(failedID: 7, focused: 7, ids: ids, active: true) == nil && advance.consecutive == 6, "Six consecutive auto-skips stop for user control")
+        for id in 1...3 { check(advance.target(failedID: id, focused: id, ids: ids, active: true) == id + 1, "Confirmed failure advances once to the next attempt"); advance.focusChanged(id + 1) }
+        check(advance.target(failedID: 4, focused: 4, ids: ids, active: true) == nil && advance.consecutive == 3, "At most three following works are tried before stopping for user control")
         advance.focusChanged(8)
         check(advance.target(failedID: 8, focused: 8, ids: ids, active: true) == 9, "Manual navigation resets finite skip budget")
         advance = PlaybackAdvanceState()
@@ -137,6 +139,19 @@ import Foundation
         check(MediaFocusPolicy.target(current: 2, previousIDs: [1,2,3,4], ids: [1,4]) == 4, "Filtered current item moves forward to the next retained work")
         check(MediaFocusPolicy.target(current: nil, previousIDs: [], ids: [5,6]) == 5, "Initial result selects the first actual item")
         check(MediaFocusPolicy.target(current: 2, previousIDs: [1,2], ids: []) == nil, "Empty result cannot keep a stale focused item")
+        let nextIntent = MediaContinuationIntent(anchorID: 2, context: "account-A:queue-1:focus-0")
+        check(nextIntent.target(focused: 2, ids: [1,2], context: nextIntent.context, active: true) == nil,
+              "An explicit next-item intent cannot manufacture a missing work")
+        check(nextIntent.target(focused: 2, ids: [1,2,3,4], context: nextIntent.context, active: true) == 3,
+              "A requested continuation picks the first available next work, not the previous or final work")
+        check(nextIntent.target(focused: 1, ids: [1,2,3], context: nextIntent.context, active: true) == nil &&
+              nextIntent.target(focused: 2, ids: [1,2,3], context: nextIntent.context, active: false) == nil,
+              "Back navigation and hidden viewers reject a stale next-item intent")
+        check(["account-B:queue-1:focus-0", "account-A:queue-2:focus-0", "account-A:queue-1:focus-1"].allSatisfy {
+            nextIntent.target(focused: 2, ids: [1,2,3], context: $0, active: true) == nil
+        }, "Account, filter queue, and explicit focus changes cannot adopt old continuation intent")
+        check(nextIntent.target(focused: 2, ids: [1,3], context: nextIntent.context, active: true) == nil,
+              "A removed anchor cannot move focus backward or select an unrelated new work")
         print("BrowsingChecks: \(checks) policy and publication checks passed")
     }
 }

@@ -119,6 +119,8 @@ struct SettingsView: View {
     @AppStorage("automaticVideoRepair") private var automaticVideoRepair = true
     @AppStorage("wifiVideoPrefetch") private var wifiVideoPrefetch = true
     @AppStorage("mediaPrefetchCount") private var mediaPrefetchCount = 6
+    @AppStorage("mediaPrefetchConcurrency") private var mediaPrefetchConcurrency = 4
+    @State private var showsGestureHelp = false
     @AppStorage("cacheLimitGB") private var cacheLimitGB = 5
     @AppStorage("deduplicateMedia") private var deduplicateMedia = true
     @AppStorage(AppTheme.appearanceKey) private var appearanceRaw = AppAppearance.system.rawValue
@@ -195,6 +197,32 @@ struct SettingsView: View {
                 Picker(selection: $mediaPrefetchCount) {
                     ForEach([3, 6, 10], id: \.self) { Text("后续 \($0) 条").tag($0) }
                 } label: { SettingsRowLabel("预加载作品", "arrow.down.circle") }
+                VStack(alignment: .leading, spacing: 9) {
+                    HStack {
+                        SettingsRowLabel("预载并发", "arrow.down.forward.and.arrow.up.backward")
+                        Spacer()
+                        Text("\(MediaPrefetchConcurrency.validated(mediaPrefetchConcurrency)) 路")
+                            .foregroundStyle(.blue).monospacedDigit()
+                            .accessibilityIdentifier("settings.prefetch-concurrency.value")
+                    }
+                    Slider(value: Binding(get: {
+                        Double(MediaPrefetchConcurrency.steps.firstIndex(of: MediaPrefetchConcurrency.validated(mediaPrefetchConcurrency)) ?? 1)
+                    }, set: { value in
+                        let index = min(max(Int(value.rounded()), 0), MediaPrefetchConcurrency.steps.count - 1)
+                        mediaPrefetchConcurrency = MediaPrefetchConcurrency.steps[index]
+                    }), in: 0...Double(MediaPrefetchConcurrency.steps.count - 1), step: 1)
+                        .accessibilityLabel("预载并发")
+                        .accessibilityValue("\(MediaPrefetchConcurrency.validated(mediaPrefetchConcurrency)) 路")
+                        .accessibilityIdentifier("settings.prefetch-concurrency")
+                    HStack {
+                        ForEach(Array(MediaPrefetchConcurrency.steps.enumerated()), id: \.offset) { index, value in
+                            if index > 0 { Spacer() }
+                            Text("\(value)").font(.caption2).foregroundStyle(.secondary).monospacedDigit()
+                        }
+                    }.accessibilityHidden(true)
+                    Text("图片与视频共用下载路数，与后续作品条数独立。当前播放优先，缓冲时预载让路，随后自动继续。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }.padding(.vertical, 5)
                 if let status = cache.preloadStatus {
                     LabeledContent("预加载状态", value: status.summary)
                     if !status.detail.isEmpty { Text(status.detail).font(.caption).foregroundStyle(.secondary) }
@@ -223,13 +251,20 @@ struct SettingsView: View {
                 Text(offline.status).font(.caption).foregroundStyle(.secondary)
                 Text("包含历史收藏；跨收藏夹去重。与浏览缓存独立，空间满时暂停下载。取消云端收藏保留本地副本，可在空间管理中按大小、时间和收藏状态清理。").font(.caption).foregroundStyle(.secondary)
             }
-            Section("时间线手势") {
-                LabeledContent { Text("上一条／下一条") } label: { SettingsRowLabel("上下划", "arrow.up.arrow.down") }
-                LabeledContent { Text("暂停／继续") } label: { SettingsRowLabel("单击视频", "hand.tap") }
-                LabeledContent { Text("进入作者主页") } label: { SettingsRowLabel("双击作品", "hand.tap.fill") }
-                LabeledContent { Text("图片／全部／视频") } label: { SettingsRowLabel("边缘左右划", "arrow.left.arrow.right") }
-                LabeledContent { Text("快退／快进") } label: { SettingsRowLabel("视频中央左右划", "gobackward") }
-                LabeledContent { Text("临时 2×，松手恢复") } label: { SettingsRowLabel("边缘长按", "hand.point.up") }
+            Section("观看帮助") {
+                DisclosureGroup(isExpanded: $showsGestureHelp) {
+                    LabeledContent("上下划", value: "上一条／下一条")
+                    LabeledContent("单击视频", value: "暂停／继续")
+                    LabeledContent("双击作品", value: "进入作者主页")
+                    LabeledContent("边缘左右划", value: "图片／全部／视频")
+                    LabeledContent("视频中央左右划", value: "快退／快进")
+                    LabeledContent("边缘长按", value: "临时 2×，松手恢复")
+                    LabeledContent("中央长按", value: "清屏／恢复")
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel("中央长按，清屏／恢复")
+                        .accessibilityIdentifier("settings.gesture.central-hold")
+                } label: { SettingsRowLabel("手势帮助", "hand.tap") }
+                .accessibilityIdentifier("settings.gesture-help")
             }
             Section("关于") {
                 Text("Civit Viewer · 个人使用的第三方客户端").font(.caption)

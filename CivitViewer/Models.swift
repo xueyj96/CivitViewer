@@ -165,21 +165,23 @@ enum VideoRecoveryDecision: Equatable { case wait, recover, skip, manualRetry }
 enum VideoRecoveryPolicy {
     static func decide(failed: Bool, failure: VideoFailure, recoveryAttempted: Bool) -> VideoRecoveryDecision {
         guard failed else { return .wait } // Waiting/loading/buffering are never terminal.
+        if failure == .http(401) || failure == .http(429) { return .manualRetry }
         if failure == .localMissing { return .skip }
         guard recoveryAttempted else { return .recover }
-        switch failure {
-        case .http(404), .http(410), .decoderMissing: return .skip
-        default: return .manualRetry
-        }
+        return .skip // A confirmed failed retry may try another work, without deleting this one.
     }
 }
 
 struct PlaybackAdvanceState {
+    static let maximumFollowingAttempts = 3
     private(set) var consecutive = 0
     private var handled = Set<Int>()
     private var automaticTarget: Int?
+    func canAdvance(failedID: Int, focused: Int?, active: Bool) -> Bool {
+        active && focused == failedID && !handled.contains(failedID) && consecutive < Self.maximumFollowingAttempts
+    }
     mutating func target(failedID: Int, focused: Int?, ids: [Int], active: Bool) -> Int? {
-        guard active, focused == failedID, !handled.contains(failedID), consecutive < 6,
+        guard canAdvance(failedID: failedID, focused: focused, active: active),
               let index = ids.firstIndex(of: failedID), ids.indices.contains(index + 1) else { return nil }
         let target = ids[index + 1]
         handled.insert(failedID); consecutive += 1; automaticTarget = target
@@ -188,6 +190,22 @@ struct PlaybackAdvanceState {
     mutating func focusChanged(_ id: Int?) {
         if automaticTarget == id { automaticTarget = nil }
         else { consecutive = 0; handled = []; automaticTarget = nil }
+    }
+}
+
+/// One requested destination, owned by a user swipe or bounded playback recovery.
+/// Appending a page alone creates no intent.
+struct MediaContinuationIntent: Equatable {
+    enum Cause: Equatable { case userSwipe, failedPlayback }
+    let anchorID: Int
+    let context: String
+    var cause: Cause = .userSwipe
+    var targetID: Int? = nil
+
+    func target(focused: Int?, ids: [Int], context: String, active: Bool) -> Int? {
+        guard active, self.context == context, focused == anchorID,
+              let index = ids.firstIndex(of: anchorID), ids.indices.contains(index + 1) else { return nil }
+        return ids[index + 1]
     }
 }
 

@@ -1,11 +1,20 @@
 import Foundation
 import Combine
 
+/// Shared preference contract for the settings UI and the prefetch scheduler.
+enum MediaPrefetchConcurrency {
+    static let defaultsKey = "mediaPrefetchConcurrency"
+    static let defaultValue = 4
+    static let steps = [2, 4, 6, 8]
+    static func validated(_ value: Int) -> Int { steps.contains(value) ? value : defaultValue }
+}
+
 /// Bounded, view-independent preloading for a moving timeline window.
 @MainActor
 final class MediaPreloader: ObservableObject {
     struct Snapshot: Equatable {
         let active: Int
+        let configuredConcurrency: Int
         let desired: Int
         let ready: Int
         let failed: Int
@@ -52,7 +61,7 @@ final class MediaPreloader: ObservableObject {
     private var invalidated = false
     private var stopped = false
     private var networkPaused = Set<Key>()
-    private let concurrencyLimit = 2
+    private var concurrencyLimit = MediaPrefetchConcurrency.defaultValue
 
     init(cache: MediaCache = .shared, network: AnyPublisher<Bool, Never>? = nil) {
         self.cache = cache
@@ -95,13 +104,14 @@ final class MediaPreloader: ObservableObject {
     }
 
     var snapshot: Snapshot {
-        Snapshot(active: jobs.count, desired: desired.count, ready: ready.count,
+        Snapshot(active: jobs.count, configuredConcurrency: concurrencyLimit, desired: desired.count, ready: ready.count,
                  failed: failed.count,
                  networkPaused: networkPaused.count)
     }
 
     func update(_ items: [MediaItem], after index: Int, count: Int = 6,
-                context newContext: String, wifiOnly newWifiOnly: Bool) {
+                context newContext: String, wifiOnly newWifiOnly: Bool,
+                concurrency newConcurrency: Int = MediaPrefetchConcurrency.defaultValue) {
         guard !Task.isCancelled else { return }
         stopped = false
         if context != newContext {
@@ -123,6 +133,7 @@ final class MediaPreloader: ObservableObject {
 
         let windowSize = [3, 6, 10].contains(count) ? count : 6
         windowTarget = windowSize
+        concurrencyLimit = MediaPrefetchConcurrency.validated(newConcurrency)
         let normalizedIndex = items.indices.contains(index) ? index : -1
         let priorFocus = currentKey
         currentKey = normalizedIndex >= 0 ? makeMediaKey(items[normalizedIndex]) : nil

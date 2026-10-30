@@ -27,24 +27,50 @@ func resolvedVideoPreparationFrame(_ anchor: Anchor<CGRect>?, in geometry: Geome
     return geometry[anchor]
 }
 
-#if DEBUG && targetEnvironment(simulator)
-private struct VideoPreparationPresentedKey: PreferenceKey {
+struct VideoPreparationPresentedKey: PreferenceKey {
     static let defaultValue = false
     static func reduce(value: inout Bool, nextValue: () -> Bool) {
         value = nextValue()
     }
 }
-#endif
+
+/// Only the focused video's inability to play drives this passive indicator.
+struct VideoWaitingIndicator: View {
+    let visible: Bool
+    @State private var isPresented = false
+
+    var body: some View {
+        ZStack {
+            Color.clear.accessibilityHidden(true)
+            if visible && isPresented {
+                ProgressView().tint(.white).controlSize(.small).dynamicTypeSize(.medium)
+                    .accessibilityLabel("视频正在缓冲")
+                    .accessibilityIdentifier("media.waiting")
+            }
+        }
+            .frame(width: 20, height: 20)
+            .allowsHitTesting(false)
+            .task(id: visible) {
+                isPresented = false
+                guard visible else { return }
+                try? await Task.sleep(for: .milliseconds(500))
+                guard !Task.isCancelled, visible else { return }
+                isPresented = true
+            }
+            .onDisappear { isPresented = false }
+    }
+}
 
 struct VideoPreparationOverlay: View {
     let visible: Bool
-    let detail: String
     let progress: Double?
     let canCancel: Bool
     let onCancel: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isPresented = false
+    @State private var presentedAt: ContinuousClock.Instant?
+    @State private var displayedProgress: Double?
     #if DEBUG && targetEnvironment(simulator)
     @State private var debugIdentity = UUID()
     #endif
@@ -56,68 +82,79 @@ struct VideoPreparationOverlay: View {
 
     #if DEBUG && targetEnvironment(simulator)
     private var debugProgressValue: String {
-        validProgress.map { String($0) } ?? "unknown"
+        displayedProgress.map { String($0) } ?? "unknown"
     }
     #endif
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                ProgressView().tint(.white.opacity(0.8)).controlSize(.small).accessibilityHidden(true)
-                Text(detail)
-                    .font(.caption).foregroundStyle(.white.opacity(0.9))
-                    .lineLimit(canCancel ? 2 : 1)
+        HStack(alignment: .bottom, spacing: 6) {
+            if let displayedProgress {
+                Text("\(Int(displayedProgress * 100))%")
+                    .font(.caption2.monospacedDigit()).foregroundStyle(.white.opacity(0.9))
+                    .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+                    .lineLimit(1).minimumScaleFactor(0.85)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .accessibilityIdentifier("media.preparation.detail")
-                if canCancel {
-                    Button(action: onCancel) {
-                        Text("取消").font(.caption.weight(.medium)).foregroundStyle(.white)
-                            .lineLimit(1).fixedSize()
-                            .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!isPresented || !visible)
-                    .accessibilityIdentifier("media.preparation.cancel")
+                    .accessibilityLabel("视频准备进度")
+                    .accessibilityValue("\(Int(displayedProgress * 100))%")
+                    .accessibilityIdentifier("media.preparation.progress")
+            } else {
+                Spacer(minLength: 0)
+            }
+            if canCancel {
+                Button(action: onCancel) {
+                    Image(systemName: "xmark").font(.system(size: 12, weight: .semibold)).foregroundStyle(.white)
+                        .frame(width: 44, height: 44, alignment: .bottom).contentShape(Rectangle())
                 }
-            }
-            if let validProgress {
-                ProgressView(value: validProgress).tint(.white.opacity(0.8)).frame(height: 3)
+                .buttonStyle(.plain)
+                .accessibilityLabel("取消视频修复")
+                .disabled(!isPresented || !visible)
+                .anchorPreference(key: VideoPreparationGestureAnchorKey.self, value: .bounds) { anchor in
+                    isPresented && visible ? anchor : nil
+                }
+                .accessibilityIdentifier("media.preparation.cancel")
             }
         }
-        .padding(.horizontal, 10).padding(.vertical, canCancel ? 6 : 7)
-        .frame(maxWidth: 272, alignment: .leading)
-        .background(Color.black.opacity(0.38), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .anchorPreference(key: VideoPreparationGestureAnchorKey.self, value: .bounds) { anchor in
-            isPresented && visible && canCancel ? anchor : nil
-        }
+        .frame(maxWidth: .infinity, minHeight: 44, maxHeight: 44, alignment: .bottomLeading)
+        .shadow(color: .black.opacity(0.65), radius: 2, y: 1)
         .opacity(isPresented ? 1 : 0)
         .allowsHitTesting(isPresented && visible && canCancel)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("media.preparation")
+        .preference(key: VideoPreparationPresentedKey.self, value: isPresented)
         #if DEBUG && targetEnvironment(simulator)
         .accessibilityValue("id=\(debugIdentity.uuidString);visible=\(isPresented ? 1 : 0);progress=\(debugProgressValue)")
-        .preference(key: VideoPreparationPresentedKey.self, value: isPresented)
         #endif
         .accessibilityHidden(!isPresented)
         .task(id: visible) {
             if visible {
-                try? await Task.sleep(for: .milliseconds(350))
+                displayedProgress = validProgress
+                guard !isPresented else { return }
+                try? await Task.sleep(for: .milliseconds(400))
                 guard !Task.isCancelled else { return }
+                presentedAt = .now
                 withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.16)) {
                     isPresented = true
                 }
             } else {
+                guard isPresented else { return }
+                let elapsed = presentedAt.map { $0.duration(to: .now) } ?? .zero
+                // Keep the inline progress stable through brief repair changes;
+                // this never delays the player or changes its surface geometry.
+                try? await Task.sleep(for: max(.milliseconds(180), .milliseconds(650) - elapsed))
+                guard !Task.isCancelled else { return }
                 withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.16)) {
                     isPresented = false
                 }
+                presentedAt = nil
             }
         }
-        .onDisappear { isPresented = false }
+        .onChange(of: validProgress) { _, value in if visible { displayedProgress = value } }
+        .onDisappear { isPresented = false; presentedAt = nil }
     }
 }
 
-// Put waiting feedback above the existing social/progress controls. The frame
-// anchor stays on the small bar, so only repair actions exclude media gestures.
+// The production status is inside VideoProgressChrome's existing 44pt band.
+// This placement helper is retained for the isolated native-control QA host.
 extension View {
     func videoPreparationPlacement(bottomClearance: CGFloat) -> some View {
         VStack(spacing: 0) {
@@ -145,15 +182,6 @@ struct VideoPreparationOverlayQAView: View {
     @State private var gestureFrame: CGRect = .zero
     @State private var panelPresented = false
 
-    private var detail: String {
-        switch stage {
-        case .native: "正在加载原生播放器"
-        case .repair: "正在转换视频格式"
-        case .newPlayer: "正在准备兼容播放器"
-        case .hidden: ""
-        }
-    }
-
     private var progress: Double? {
         stage == .repair ? 0.65 : nil
     }
@@ -175,13 +203,13 @@ struct VideoPreparationOverlayQAView: View {
         GeometryReader { geometry in
             ZStack {
                 Color.gray.opacity(0.25)
-                VideoPreparationOverlay(
-                    visible: stage != .hidden,
-                    detail: detail,
-                    progress: progress,
-                    canCancel: stage == .repair,
-                    onCancel: { cancelCount += 1; stage = .hidden }
-                )
+                VideoWaitingIndicator(visible: stage != .hidden)
+                VideoProgressChrome(position: 3, duration: 30, bufferedRanges: [.init(start: 0, end: 12)],
+                    enabled: false, emphasized: false, showTimes: false,
+                    onSeek: { _, _ in }, onInteractionChange: { _ in },
+                    preparationVisible: stage == .repair,
+                    preparationProgress: progress, preparationCanCancel: stage == .repair,
+                    onPreparationCancel: { cancelCount += 1; stage = .hidden })
                 .videoPreparationPlacement(bottomClearance: 130)
 
                 VStack {
@@ -218,7 +246,7 @@ struct VideoPreparationOverlayQAView: View {
                     active: true,
                     isVideo: true,
                     topExclusion: 0,
-                    bottomExclusion: 80,
+                    bottomExclusion: 174,
                     excludedFrames: gestureFrame.isEmpty ? [] : [gestureFrame],
                     onTap: { tapCount += 1 },
                     onChromeHold: { chromeHoldCount += 1 }
